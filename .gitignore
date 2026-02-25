@@ -1,0 +1,24 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Backend runtime artifacts
+backend/logs/
+backend/*.db
+backend/**/*.db
+
+# Data artifacts
+data/*.csv
+data/*.xlsx
+data/*.xls
+data/*.db
+
+# OS / editor
+.vscode/
+.idea/

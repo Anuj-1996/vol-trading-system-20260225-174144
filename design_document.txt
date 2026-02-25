@@ -1,0 +1,609 @@
+
+
+============================================================
+PROJECT DOCUMENT
+NIFTY STOCHASTIC VOLATILITY STRATEGY OPTIMIZATION SYSTEM
+Version 3.0
+Scope: Personal Institutional Grade Risk Engine
+
+⸻
+
+	1.	SYSTEM OVERVIEW
+
+⸻
+
+1.1 Objective
+
+Build a backend driven quantitative system with frontend interface that:
+	•	Performs joint Heston calibration across term structure
+	•	Uses Carr Madaan FFT for fast pricing
+	•	Filters illiquid strikes
+	•	Handles weekly and monthly expiries
+	•	Generates and evaluates all supported option strategies
+	•	Supports static and dynamic hedging
+	•	Detects model vs market surface misfit
+	•	Ranks strategies based on regime aware risk adjusted scoring
+
+Target underlying: NIFTY index options
+
+Primary language: Python
+Frontend: React
+Backend API: FastAPI
+Database: PostgreSQL or SQLite for local
+
+⸻
+
+⸻
+
+	2.	HIGH LEVEL ARCHITECTURE
+
+⸻
+
+2.1 Logical Architecture
+
+Frontend (React + Visualization Layer)
+↓ REST API
+Backend (FastAPI)
+↓
+Quant Engine Core
+↓
+Database + File Storage
+
+2.2 Backend Layer Separation
+
+Backend consists of:
+	1.	API Layer
+	2.	Service Layer
+	3.	Quant Core Layer
+	4.	Data Access Layer
+	5.	Storage Layer
+
+2.3 Major System Components
+
+A. Data Ingestion Service
+B. Surface Builder
+C. Liquidity Filter Engine
+D. Joint Heston Calibration Engine
+E. Model vs Market Diagnostics
+F. Monte Carlo Engine
+G. Strategy Permutation Engine
+H. Static Evaluation Engine
+I. Dynamic Hedging Engine
+J. Ranking Engine
+K. Backtest Engine
+
+⸻
+
+⸻
+
+	3.	BACKEND DESIGN
+
+⸻
+
+============================================================
+3.1 BACKEND HIGH LEVEL DESIGN
+
+Backend responsibilities:
+	•	Manage data ingestion
+	•	Maintain structured option surface
+	•	Perform calibration
+	•	Run simulation
+	•	Generate strategy results
+	•	Serve data to frontend
+
+Technology stack:
+
+FastAPI
+NumPy
+SciPy
+Numba
+Pandas
+PostgreSQL
+
+Deployment:
+
+Local for v1
+Containerized via Docker for v2
+
+⸻
+
+============================================================
+3.2 BACKEND LOW LEVEL DESIGN
+
+⸻
+
+3.2.1 Data Ingestion Module
+
+Input:
+
+Folder structure:
+
+/data/YYYYMMDD/*.xlsx
+
+Responsibilities:
+	•	Detect new files
+	•	Parse expiry date
+	•	Identify weekly or monthly
+	•	Normalize columns
+	•	Store raw chain in database
+
+Database Tables:
+
+OptionChainRaw
+	•	date
+	•	expiry
+	•	strike
+	•	call_price
+	•	put_price
+	•	call_iv
+	•	put_iv
+	•	volume
+	•	open_interest
+	•	bid
+	•	ask
+
+⸻
+
+⸻
+
+3.2.2 Liquidity Filtering Engine
+
+Input:
+
+OptionChainRaw
+
+Filtering Rules:
+	•	Exclude OI below threshold
+	•	Exclude volume below threshold
+	•	Exclude bid ask spread above threshold
+	•	Exclude strikes beyond configurable moneyness window
+	•	Enforce strike increment rule (50 or 100)
+
+Output:
+
+FilteredOptionChain
+
+⸻
+
+⸻
+
+3.2.3 Surface Builder
+
+Input:
+
+FilteredOptionChain
+
+Responsibilities:
+	•	Construct implied vol smile per expiry
+	•	Interpolate across strikes
+	•	Interpolate across maturities
+	•	Build full market surface grid
+
+Data Structure:
+
+MarketSurface
+	•	expiry_list
+	•	strike_grid
+	•	maturity_grid
+	•	implied_vol_matrix
+
+⸻
+
+⸻
+
+3.2.4 Joint Heston Calibration Engine
+
+Model:
+
+Heston stochastic volatility model
+
+Pricing:
+
+Carr Madaan FFT
+
+Joint Calibration Objective:
+
+Minimize weighted squared error across:
+
+All strikes
+All expiries simultaneously
+
+Decision Variables:
+
+kappa
+theta
+xi
+rho
+v0
+
+Constraints:
+	•	Feller condition soft constraint
+	•	Parameter bounds
+
+Objective Function:
+
+Weighted RMSE between model IV and market IV
+
+Weights:
+
+Liquidity weighted
+Short maturity higher weight
+
+Output:
+
+JointHestonParameters
+CalibrationErrorMetrics
+
+Store calibration history for stability monitoring.
+
+⸻
+
+⸻
+
+3.2.5 Model vs Market Diagnostics
+
+Compute:
+	•	Residual surface
+	•	Wing mispricing
+	•	Term structure deviation
+	•	Skew slope mismatch
+
+Metrics:
+
+RMSE per expiry
+Systematic bias detection
+
+Flag if calibration unstable.
+
+⸻
+
+⸻
+
+3.2.6 Monte Carlo Engine
+
+Modes:
+	1.	Terminal only simulation
+	2.	Full path simulation
+
+Discretization:
+
+Euler or QE scheme
+
+Inputs:
+
+JointHestonParameters
+Time to maturity
+Risk free rate
+
+Outputs:
+
+SimulationResult
+	•	terminal_prices
+	•	full_price_paths (optional)
+	•	volatility_paths
+
+Vectorized implementation required.
+Numba acceleration mandatory.
+
+⸻
+
+⸻
+
+3.2.7 Strategy Permutation Engine
+
+Supported Strategies:
+
+Long Call
+Long Put
+Covered Call
+Protective Put
+Cash Secured Put
+Bull Call Spread
+Bear Put Spread
+Bull Put Spread
+Bear Call Spread
+Long Straddle
+Long Strangle
+Iron Condor
+Iron Butterfly
+Butterfly Spread
+Calendar Spread
+Diagonal Spread
+Protective Collar
+Ratio Backspread
+
+Implementation:
+
+Each strategy implemented as class:
+
+StrategyTemplate
+	•	generate_valid_combinations(strike_set)
+	•	compute_margin()
+
+Constraints:
+	•	Capital limit
+	•	Max legs
+	•	Strike increment enforcement
+	•	Distance constraints
+
+Output:
+
+StrategyObject list
+
+⸻
+
+⸻
+
+3.2.8 Static Evaluation Engine
+
+For each StrategyObject:
+
+Loop through terminal_prices.
+
+Compute:
+
+Expected Value
+VaR 95
+VaR 99
+Expected Shortfall
+Probability of loss
+Return on Margin
+PnL Skewness
+Convexity Exposure
+
+Store in StrategyMetrics table.
+
+⸻
+
+⸻
+
+3.2.9 Dynamic Hedging Engine
+
+User selectable:
+	•	No hedge
+	•	Daily delta hedge
+	•	Threshold hedge
+
+Process:
+
+For each path:
+
+At each time step:
+	•	Compute model delta
+	•	Adjust hedge
+	•	Subtract transaction cost
+	•	Track cumulative PnL
+
+Output:
+
+DynamicPnLDistribution
+
+Heavy compute. Must allow async processing.
+
+⸻
+
+⸻
+
+3.2.10 Ranking Engine
+
+Score Function:
+
+Score =
+Normalized EV
+− lambda1 * ES99
+− lambda2 * FragilityScore
+	•	lambda3 * ReturnOnMargin
+
+Lambda values depend on regime state.
+
+Top N strategies stored.
+
+⸻
+
+⸻
+
+3.2.11 Backtesting Engine
+
+Walk forward logic:
+
+For each historical date:
+	•	Ingest data
+	•	Calibrate
+	•	Generate strategies
+	•	Select top strategy
+	•	Compare realized expiry PnL
+
+Metrics:
+
+Sharpe
+Max Drawdown
+Tail error rate
+Calibration drift
+
+Out of sample validation mandatory.
+
+⸻
+
+⸻
+
+	4.	FRONTEND DESIGN
+
+⸻
+
+============================================================
+4.1 FRONTEND HIGH LEVEL DESIGN
+
+Framework:
+
+React
+
+State Management:
+
+Redux or Zustand
+
+Visualization:
+
+Plotly.js
+D3.js
+
+Frontend Responsibilities:
+	•	Upload data
+	•	Configure parameters
+	•	Trigger simulation
+	•	Display results
+	•	Visualize surfaces and distributions
+
+⸻
+
+============================================================
+4.2 FRONTEND LOW LEVEL DESIGN
+
+⸻
+
+4.2.1 Dashboard Layout
+
+Sections:
+	1.	Market Overview Panel
+	2.	Surface Visualization
+	3.	Calibration Diagnostics
+	4.	Strategy Generator Panel
+	5.	Strategy Ranking Table
+	6.	Strategy Detail Panel
+	7.	Dynamic Hedging Visualization
+
+⸻
+
+⸻
+
+4.2.2 Market Overview Panel
+
+Display:
+
+Spot
+ATM IV
+Realized vs Implied spread
+Regime classification
+Calibration RMSE
+
+⸻
+
+⸻
+
+4.2.3 Surface Visualization
+
+3D volatility surface
+
+Toggle:
+
+Market Surface
+Model Surface
+Residual Surface
+
+Heatmap for skew.
+
+⸻
+
+⸻
+
+4.2.4 Strategy Configuration Panel
+
+User inputs:
+
+Capital
+Strike increment
+Liquidity threshold
+Simulation paths
+Static vs Dynamic hedge
+
+Submit button triggers backend job.
+
+⸻
+
+⸻
+
+4.2.5 Strategy Ranking Table
+
+Columns:
+
+Strategy Type
+Strikes
+Net Premium
+Expected Return
+VaR 99
+Expected Shortfall
+Return on Margin
+Fragility Score
+Overall Score
+
+Sortable.
+
+⸻
+
+⸻
+
+4.2.6 Strategy Detail View
+
+Show:
+
+PnL distribution histogram
+Shock scenario table
+Hedge evolution plot
+Delta over time
+Gamma over time
+
+⸻
+
+⸻
+
+4.2.7 Async Job Handling
+
+Dynamic hedging and large permutation runs must:
+	•	Trigger background task
+	•	Return job id
+	•	Frontend polls status
+	•	Display progress bar
+
+⸻
+
+⸻
+
+	5.	PERFORMANCE CONSIDERATIONS
+
+⸻
+
+	•	FFT pricing cached
+	•	Vectorized PnL evaluation
+	•	Parallel strategy evaluation
+	•	Limit strike window
+	•	Optional GPU acceleration later
+
+⸻
+
+⸻
+
+	6.	RISK CONTROLS
+
+⸻
+
+	•	Calibration confidence threshold
+	•	Minimum liquidity enforcement
+	•	Minimum sample size for regime detection
+	•	Out of sample validation before trusting ranking
+
+⸻
+
+⸻
+
+	7.	FUTURE EXTENSIONS
+
+⸻
+
+	•	Bates jump integration
+	•	Cross asset vol signals
+	•	Order flow based skew adjustment
+	•	Reinforcement learning strategy selector
+
+⸻
+
+END OF DOCUMENT
+

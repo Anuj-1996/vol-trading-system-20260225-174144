@@ -1,0 +1,293 @@
+GLOBAL LAYOUT STRUCTURE
+
+use bloomberg terminal style
+
+Layout type:
+Left sidebar navigation
+Top status bar
+Main content grid
+Bottom system status strip
+
+Sidebar sections:
+	1.	Market
+	2.	Vol Surface
+	3.	Strategy Screener
+	4.	Strategy Detail
+	5.	Risk Lab
+	6.	Backtest
+	7.	Portfolio
+	8.	Settings
+
+Top bar contains:
+
+• Underlying selector dropdown
+• Expiry selector
+• Spot price live
+• IV ATM
+• Regime indicator
+• Clock
+• Run Static button
+• Run Dynamic button
+
+Bottom strip:
+
+• Job status
+• Model status
+• Calibration status
+• Data latency
+
+⸻
+
+PAGE 1: MARKET OVERVIEW
+
+Purpose: Context before strategy decision.
+
+Layout: 3 column grid.
+
+Left Column (30% width)
+
+Panel 1: Price Chart
+	•	Candlestick
+	•	Volume
+	•	20d and 60d realized vol overlay
+
+Panel 2: Realized Vol Metrics
+	•	10d RV
+	•	20d RV
+	•	60d RV
+	•	RV percentile
+
+Middle Column (40%)
+
+Panel 3: IV Term Structure
+	•	Line chart across expiries
+	•	ATM IV curve
+
+Panel 4: Skew Curve
+	•	IV vs Strike
+	•	Mark ATM
+
+Right Column (30%)
+
+Panel 5: Market Regime Box
+	•	Trend regime
+	•	Vol regime
+	•	Skew regime
+
+Panel 6: Vol Stats
+	•	IV Rank
+	•	IV Percentile
+	•	IV minus RV spread
+	•	VVIX equivalent
+
+⸻
+
+PAGE 2: VOL SURFACE
+
+Purpose: Core vol trader screen.
+
+Layout: 2x2 grid.
+
+Top Left: Market IV Surface 3D
+Top Right: Model IV Surface 3D
+Bottom Left: Surface Difference Heatmap
+Bottom Right: Slice Viewer
+
+Slice Viewer includes:
+
+• Expiry slice
+• Strike slice
+• Smile curve
+• Model error metrics
+
+Add sliders:
+
+• Select expiry
+• Select strike
+• Toggle log moneyness
+
+⸻
+
+PAGE 3: STRATEGY SCREENER
+
+Purpose: Ranking engine.
+
+Layout: Table dominant.
+
+Top: Filters bar
+	•	Strategy type
+	•	Delta range
+	•	Vega range
+	•	Max margin
+	•	Expiry
+
+Main Section: Ranking Table
+
+Columns:
+
+• Strategy Type
+• Strikes
+• Cost
+• Expected Return
+• VaR 95
+• VaR 99
+• Expected Shortfall
+• Return on Margin
+• Vega Exposure
+• Gamma Exposure
+• Fragility Score
+• Overall Score
+
+Right side mini panel:
+
+Selected strategy summary:
+
+• Mini payoff diagram
+• Key Greeks
+• Margin required
+• Break even levels
+
+⸻
+
+PAGE 4: STRATEGY DETAIL
+
+Purpose: Deep dive.
+
+Layout: Multi panel.
+
+Top Row:
+
+Left: Payoff at expiry chart
+Right: PnL distribution histogram
+
+Second Row:
+
+Left: Greeks vs Spot interactive
+Right: Greeks vs Vol shift interactive
+
+Third Row:
+
+Left: Monte Carlo paths
+Right: Stress scenarios table
+
+Stress table:
+
+• Spot minus 5%
+• Spot plus 5%
+• Vol plus 10%
+• Vol crush
+• Time decay 1 week
+
+Fourth Row:
+
+Risk decomposition pie:
+
+• Gamma contribution
+• Vega contribution
+• Theta
+• Skew
+
+⸻
+
+PAGE 5: RISK LAB
+
+Purpose: Sensitivity engine.
+
+Layout: Control panel left, output right.
+
+Left Control Panel:
+
+• Spot shift slider
+• Vol shift slider
+• Skew twist control
+• Time forward control
+• Correlation control
+
+Right Output:
+
+• Updated PnL
+• Updated Greeks
+• VaR recalculated
+• Expected Shortfall recalculated
+• Risk heatmap
+
+⸻
+
+PAGE 6: BACKTEST ENGINE
+
+Purpose: Historical testing.
+
+Top Controls:
+
+• Start date
+• End date
+• Rebalance frequency
+• Hedge frequency
+• Slippage assumption
+
+Main Panels:
+
+Left: Equity curve
+Right: Drawdown chart
+
+Bottom:
+
+• Performance metrics table
+	•	CAGR
+	•	Sharpe
+	•	Sortino
+	•	Max DD
+	•	Win rate
+
+⸻
+
+PAGE 7: PORTFOLIO MONITOR
+
+Purpose: Live book view.
+
+Top:
+
+• Total PnL
+• Daily PnL
+• Total Vega
+• Total Gamma
+• Total Delta
+
+Main:
+
+Positions table:
+
+• Instrument
+• Quantity
+• Price
+• PnL
+• Delta
+• Vega
+• Margin
+
+Right:
+
+Portfolio Greeks heatmap
+
+⸻
+
+PAGE 8: SETTINGS
+
+• Model selection dropdown
+	•	Black Scholes
+	•	Heston
+	•	SABR
+
+• Calibration panel
+• Simulation paths
+• Confidence level
+• Scoring weights editor
+
+⸻
+
+IMPORTANT DESIGN PRINCIPLES
+	1.	No repetition of same metrics without new context
+	2.	Every number must have driver visualization
+	3.	Risk metrics must update dynamically
+	4.	Use dense compact tables
+	5.	No wasted white space

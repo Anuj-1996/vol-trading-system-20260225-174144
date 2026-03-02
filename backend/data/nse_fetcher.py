@@ -119,14 +119,35 @@ class NSEOptionChainFetcher:
                 context={"symbol": symbol},
             )
 
-        # Filter to future expiries only
-        today = date.today()
+        # Filter to future expiries only — skip contracts that have already
+        # expired.  NSE index options expire at 15:30 IST on the expiry day,
+        # so anything on or before today at >=15:30 IST is expired.
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        _IST = _tz(offset=_td(hours=5, minutes=30))
+        _now_ist = _dt.now(tz=_IST)
+        _today = _now_ist.date()
+        _expiry_cutoff_hour = 15   # 3:30 PM IST
+        _expiry_cutoff_minute = 30
+
         future_expiries: List[Tuple[str, date]] = []
         for exp_str in expiry_strings:
             try:
                 exp_date = _parse_nse_date(exp_str, _NSE_EXPIRY_FORMATS)
-                if exp_date >= today:
+                if exp_date > _today:
+                    # Strictly future day → always valid
                     future_expiries.append((exp_str, exp_date))
+                elif exp_date == _today:
+                    # Same day → only include if market hasn't closed yet
+                    if _now_ist.hour < _expiry_cutoff_hour or (
+                        _now_ist.hour == _expiry_cutoff_hour and _now_ist.minute < _expiry_cutoff_minute
+                    ):
+                        future_expiries.append((exp_str, exp_date))
+                    else:
+                        self._logger.info(
+                            "SKIP_EXPIRED_TODAY | expiry=%s | now=%s (past 15:30 IST)",
+                            exp_str, _now_ist.strftime("%H:%M"),
+                        )
+                # else: exp_date < today → skip
             except DataIngestionError:
                 self._logger.warning("SKIP_EXPIRY | unparseable=%s", exp_str)
                 continue

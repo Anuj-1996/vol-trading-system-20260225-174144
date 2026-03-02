@@ -25,6 +25,7 @@ const INITIAL_FORM = {
   max_width: 1000,
   simulation_paths: 5000,
   simulation_steps: 32,
+  max_expiries: 5,
 };
 
 const NAV_ITEMS = [
@@ -155,7 +156,7 @@ export default function App() {
 
       setFetchProgress(PROGRESS_STEPS[2]);
       const { snapshotId, fallbackModules, liveMetadata: meta } =
-        await runLiveForSnapshot(underlying, pipelineParams);
+        await runLiveForSnapshot(underlying, pipelineParams, Number(form.max_expiries));
 
       setFetchProgress(PROGRESS_STEPS[4]);
       setLiveMetadata(meta);
@@ -238,6 +239,17 @@ export default function App() {
             value={form.simulation_paths}
             onChange={(event) => setForm((prev) => ({ ...prev, simulation_paths: Number(event.target.value) }))}
           />
+        </label>
+      </Panel>
+      <Panel title="Expiry Settings">
+        <label>
+          Number of expiries to fetch
+          <select value={form.max_expiries} onChange={(event) => setForm((prev) => ({ ...prev, max_expiries: Number(event.target.value) }))}>
+            {[3, 4, 5, 6, 7, 8, 10, 12].map((n) => (
+              <option key={n} value={n}>{n} expiries</option>
+            ))}
+          </select>
+          <span style={{fontSize: '11px', color: '#9ca3af', marginTop: 4, display: 'block'}}>More expiries = richer term structure for Heston calibration, but slower fetch (~2s each). 5-8 is optimal.</span>
         </label>
       </Panel>
       <Panel title="Confidence Level">

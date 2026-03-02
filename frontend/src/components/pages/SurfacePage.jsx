@@ -224,8 +224,28 @@ export default function SurfacePage({
     : 0;
   const selectedOiRow = openInterestMatrix[sliceExpiryIndex] || [];
   const selectedMaxPain = Number(maxPainByExpiry[sliceExpiryIndex] ?? 0);
-  const marketIvDistribution = (marketMatrix[sliceExpiryIndex] || marketMatrix.flat() || []).map((value) => Number(value)).filter((value) => Number.isFinite(value));
-  const modelIvDistribution = (smoothedModelMatrix[sliceExpiryIndex] || smoothedModelMatrix.flat() || []).map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  const marketIvDistribution = (marketMatrix[sliceExpiryIndex] || marketMatrix.flat() || []).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
+  const modelIvDistribution = (smoothedModelMatrix[sliceExpiryIndex] || smoothedModelMatrix.flat() || []).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
+
+  // Gaussian KDE helper for smooth PDF curves
+  const computeKDE = (data, nPoints = 200) => {
+    if (!data.length) return { x: [], y: [] };
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    const range = max - min || 0.01;
+    const bandwidth = 1.06 * (data.reduce((s, v) => s + (v - data.reduce((a, b) => a + b, 0) / data.length) ** 2, 0) / data.length) ** 0.5 * data.length ** -0.2 || range * 0.05;
+    const xMin = min - range * 0.15;
+    const xMax = max + range * 0.15;
+    const step = (xMax - xMin) / nPoints;
+    const xs = Array.from({ length: nPoints }, (_, i) => xMin + i * step);
+    const ys = xs.map((x) => {
+      const sum = data.reduce((acc, xi) => acc + Math.exp(-0.5 * ((x - xi) / bandwidth) ** 2), 0);
+      return sum / (data.length * bandwidth * Math.sqrt(2 * Math.PI));
+    });
+    return { x: xs, y: ys };
+  };
+  const marketKDE = computeKDE(marketIvDistribution);
+  const modelKDE = computeKDE(modelIvDistribution);
 
   useEffect(() => {
     setSliceExpiryIndex(selectedExpiryIndex);
@@ -420,24 +440,28 @@ export default function SurfacePage({
           />
         </Panel>
 
-        <Panel title="Distribution Plots">
+        <Panel title="Distribution Plots (KDE)">
           <Plot
             data={[
               {
-                type: 'histogram',
-                x: marketIvDistribution,
-                opacity: 0.6,
-                marker: { color: '#22c55e' },
-                name: 'Market IV Dist',
-                nbinsx: 24,
+                type: 'scatter',
+                mode: 'lines',
+                x: marketKDE.x,
+                y: marketKDE.y,
+                line: { color: '#22c55e', width: 2.5 },
+                fill: 'tozeroy',
+                fillcolor: 'rgba(34,197,94,0.15)',
+                name: 'Market IV',
               },
               {
-                type: 'histogram',
-                x: modelIvDistribution,
-                opacity: 0.6,
-                marker: { color: '#f59e0b' },
-                name: 'Model IV Dist',
-                nbinsx: 24,
+                type: 'scatter',
+                mode: 'lines',
+                x: modelKDE.x,
+                y: modelKDE.y,
+                line: { color: '#f59e0b', width: 2.5, dash: 'dot' },
+                fill: 'tozeroy',
+                fillcolor: 'rgba(245,158,11,0.10)',
+                name: 'Model IV',
               },
             ]}
             layout={{
@@ -447,8 +471,7 @@ export default function SurfacePage({
               plot_bgcolor: '#0a0f19',
               font: { color: '#d1d5db', size: 11 },
               xaxis: { title: 'Implied Vol', gridcolor: '#1f2937' },
-              yaxis: { title: 'Frequency', gridcolor: '#1f2937' },
-              barmode: 'overlay',
+              yaxis: { title: 'Density', gridcolor: '#1f2937' },
               legend: { orientation: 'h' },
             }}
             config={{ displaylogo: false, responsive: true }}

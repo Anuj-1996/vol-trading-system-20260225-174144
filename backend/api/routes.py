@@ -39,6 +39,12 @@ class LiveFetchPayload(BaseModel):
         default=None,
         description='List of expiry date strings, or null/["all"] for all',
     )
+    max_expiries: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Maximum number of near-term expiries to fetch (default 5)",
+    )
 
 
 class LiveStaticPipelinePayload(BaseModel):
@@ -154,6 +160,7 @@ def fetch_live_nse_data(payload: LiveFetchPayload) -> dict:
         result = _engine.fetch_nse_live_data(
             symbol=payload.symbol,
             expiries=payload.expiries,
+            max_expiries=payload.max_expiries,
         )
         _logger.info("END | fetch_live_nse_data | data_id=%s", result["data_id"])
         return {"status": "ok", "data": result}

@@ -92,6 +92,7 @@ class StrategyEngineService:
         self,
         symbol: str = "NIFTY",
         expiries: Optional[List[str]] = None,
+        max_expiries: int = 5,
     ) -> Dict[str, Any]:
         """
         Fetch live data from NSE, clean it, cache it, and return summary.
@@ -112,7 +113,9 @@ class StrategyEngineService:
         self._logger.info("FETCH_NSE_LIVE | symbol=%s | expiries=%s", symbol, expiries)
 
         if expiries is None or expiries == ["all"] or not expiries:
-            fetch_result = self._nse_fetcher.fetch_all_expiries(symbol=symbol)
+            fetch_result = self._nse_fetcher.fetch_all_expiries(
+                symbol=symbol, max_expiries=max_expiries,
+            )
         else:
             # Fetch single expiry
             fetch_result = self._nse_fetcher.fetch_single_expiry(

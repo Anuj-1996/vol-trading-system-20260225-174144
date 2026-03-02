@@ -322,10 +322,10 @@ export async function getRecentLogs(lineCount = 120) {
 // NSE Live Data
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function fetchLiveNSEData(symbol = 'NIFTY', expiries = null) {
+export async function fetchLiveNSEData(symbol = 'NIFTY', expiries = null, maxExpiries = 5) {
   return request('/data/fetch-live', {
     method: 'POST',
-    body: JSON.stringify({ symbol, expiries }),
+    body: JSON.stringify({ symbol, expiries, max_expiries: maxExpiries }),
   });
 }
 
@@ -340,9 +340,9 @@ export async function runLiveStaticPipeline(payload) {
   });
 }
 
-export async function runLiveForSnapshot(symbol = 'NIFTY', pipelineParams = {}) {
+export async function runLiveForSnapshot(symbol = 'NIFTY', pipelineParams = {}, maxExpiries = 5) {
   // Step 1: Fetch live data from NSE
-  const fetchResponse = await fetchLiveNSEData(symbol);
+  const fetchResponse = await fetchLiveNSEData(symbol, null, maxExpiries);
   const { data_id, spot, quality_report, expiry_dates } = fetchResponse.data;
 
   // Step 2: Run the pipeline on the cached live data

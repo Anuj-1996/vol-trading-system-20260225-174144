@@ -314,6 +314,15 @@ export default function App() {
     return Math.max(0, Math.min(parsed, maturityGrid.length - 1));
   }, [selectedExpiry, surface]);
 
+  const backendStatusClass =
+    backendStatus === 'connected'
+      ? 'status-text-ok'
+      : backendStatus === 'disconnected'
+        ? 'status-text-bad'
+        : 'status-text-warn';
+
+  const calibrationStatusClass = market ? 'status-text-ok' : 'status-text-warn';
+
   const renderActivePage = () => {
     if (activePage === 'market') {
       return (
@@ -413,6 +422,7 @@ export default function App() {
           <div className="top-metric"><span>Spot</span><strong>{formatNumber(market?.spot, 2)}</strong></div>
           <div className="top-metric"><span>IV ATM</span><strong>{formatNumber((market?.atm_iv || 0) * 100, 2)}</strong></div>
           <div className="top-metric"><span>Regime</span><strong>{market?.regime?.label || '-'}</strong></div>
+          <div className="top-metric"><span>Model</span><strong className={backendStatusClass}>{backendStatus}</strong></div>
           <div className="top-metric"><span>Clock</span><strong>{clockValue.toLocaleTimeString()}</strong></div>
           <button type="button" className="action-btn" onClick={runStatic} disabled={loading}>Run Static</button>
           <button type="button" className="action-btn accent" onClick={runDynamic} disabled={loading}>Run Dynamic</button>
@@ -424,8 +434,8 @@ export default function App() {
 
         <footer className="bottom-strip">
           <div><span>Job status</span><strong>{dynamicState}</strong></div>
-          <div><span>Model status</span><strong>{backendStatus}</strong></div>
-          <div><span>Calibration status</span><strong>{market ? 'loaded' : 'pending'}</strong></div>
+          <div><span>Model status</span><strong className={backendStatusClass}>{backendStatus}</strong></div>
+          <div><span>Calibration status</span><strong className={calibrationStatusClass}>{market ? 'loaded' : 'pending'}</strong></div>
           <div><span>Data latency</span><strong>{activeSnapshotId ? 'snapshot_live' : 'no_snapshot'}</strong></div>
           <div><span>Snapshot</span><strong>{activeSnapshotId || '-'}</strong></div>
         </footer>

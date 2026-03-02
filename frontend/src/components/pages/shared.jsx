@@ -7,9 +7,9 @@ export function formatNumber(value, digits = 2) {
   return Number(value).toFixed(digits);
 }
 
-export function Panel({ title, children }) {
+export function Panel({ title, children, className = '' }) {
   return (
-    <section className="bbg-panel">
+    <section className={`bbg-panel ${className}`.trim()}>
       <header className="bbg-panel-header">{title}</header>
       <div className="bbg-panel-body">{children}</div>
     </section>

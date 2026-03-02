@@ -44,7 +44,7 @@ class LiquidityWeightedObjective:
         rate: float,
         dividend_yield: float,
     ) -> CalibrationErrorMetrics:
-        self._logger.info("START | objective_compute")
+        self._logger.debug("START | objective_compute")
         expiry_weights = self._build_weights(filtered_records)
         total_weight = max(sum(expiry_weights.values()), 1e-8)
 
@@ -73,7 +73,7 @@ class LiquidityWeightedObjective:
             market_ivs = market_surface.implied_vol_matrix[expiry_index, :]
 
             sample_count = min(5, strikes.size)
-            self._logger.info(
+            self._logger.debug(
                 "MODEL_TRACE | expiry=%s | maturity=%.6f | params=(kappa=%.6f,theta=%.6f,xi=%.6f,rho=%.6f,v0=%.6f) | prices_first5=%s | ivs_first5=%s",
                 expiry,
                 maturity,
@@ -111,7 +111,7 @@ class LiquidityWeightedObjective:
         weighted_rmse = float(np.sqrt(weighted_error_sum / total_weight))
         feller_gap = 2.0 * params.kappa * params.theta - params.xi**2
 
-        self._logger.info(
+        self._logger.debug(
             "END | objective_compute | weighted_rmse=%.8f | feller_gap=%.8f",
             weighted_rmse,
             feller_gap,

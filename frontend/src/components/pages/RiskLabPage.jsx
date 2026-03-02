@@ -29,9 +29,12 @@ export default function RiskLabPage({ loading, activeSnapshotId, risk }) {
       gamma: baseGamma * spotFactor * skewFactor,
       vega: baseVega * volFactor * corrFactor,
       var95: Math.abs(baseVar95) * spotFactor * corrFactor,
+      var99: Math.abs(Number(risk?.var_99 ?? baseVar95 * 1.3)) * spotFactor * corrFactor,
       es: Math.abs(baseEs) * spotFactor * corrFactor,
     };
   }, [risk, spotShift, volShift, skewTwist, timeForward, correlation]);
+
+  const scenarioAxis = [-20, -10, 0, 10, 20];
 
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
@@ -63,10 +66,43 @@ export default function RiskLabPage({ loading, activeSnapshotId, risk }) {
             <div><span>Updated Gamma</span><strong>{formatNumber(updated.gamma, 4)}</strong></div>
             <div><span>Updated Vega</span><strong>{formatNumber(updated.vega, 4)}</strong></div>
             <div><span>VaR Recalculated</span><strong>{formatNumber(updated.var95, 4)}</strong></div>
+            <div><span>VaR 99 Recalculated</span><strong>{formatNumber(updated.var99, 4)}</strong></div>
             <div><span>Expected Shortfall</span><strong>{formatNumber(updated.es, 4)}</strong></div>
           </div>
           <Plot
-            data={[{ type: 'heatmap', x: [-20, -10, 0, 10, 20], y: [-20, -10, 0, 10, 20], z: [-20, -10, 0, 10, 20].map((row) => [-20, -10, 0, 10, 20].map((col) => updated.pnl * (1 + (row + col) / 200))), colorscale: 'Viridis' }]}
+            data={[
+              {
+                type: 'scatter',
+                mode: 'lines+markers',
+                x: scenarioAxis,
+                y: scenarioAxis.map((point) => updated.var95 * (1 + point / 150)),
+                name: 'VaR 95',
+                line: { color: '#f59e0b', width: 2 },
+              },
+              {
+                type: 'scatter',
+                mode: 'lines+markers',
+                x: scenarioAxis,
+                y: scenarioAxis.map((point) => updated.es * (1 + point / 150)),
+                name: 'Expected Shortfall',
+                line: { color: '#f43f5e', width: 2 },
+              },
+            ]}
+            layout={{
+              height: 180,
+              margin: { l: 38, r: 20, b: 30, t: 20 },
+              paper_bgcolor: '#0a0f19',
+              plot_bgcolor: '#0a0f19',
+              font: { color: '#d1d5db', size: 11 },
+              xaxis: { title: 'Scenario Shift %', gridcolor: '#1f2937' },
+              yaxis: { title: 'Risk', gridcolor: '#1f2937' },
+            }}
+            config={{ displaylogo: false, responsive: true }}
+            style={{ width: '100%' }}
+            useResizeHandler
+          />
+          <Plot
+            data={[{ type: 'heatmap', x: scenarioAxis, y: scenarioAxis, z: scenarioAxis.map((row) => scenarioAxis.map((col) => updated.pnl * (1 + (row + col) / 200))), colorscale: 'Viridis' }]}
             layout={{
               height: 280,
               margin: { l: 38, r: 20, b: 32, t: 20 },

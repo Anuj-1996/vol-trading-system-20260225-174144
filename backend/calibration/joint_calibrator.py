@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 from typing import List, Tuple
 
 import numpy as np
@@ -14,6 +15,11 @@ from ..surface.builder import MarketSurface
 from ..data.models import FilteredOptionRecord
 from .heston_fft import HestonFFTPricer, JointHestonParameters
 from .objective import CalibrationErrorMetrics, LiquidityWeightedObjective
+
+try:
+    from tqdm.auto import tqdm
+except Exception:  # pragma: no cover - graceful fallback
+    tqdm = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +59,9 @@ class JointHestonCalibrator:
         self._logger.info("START | calibrate | expiries=%d", len(market_surface.expiry_list))
 
         iteration_counter = {"value": 0}
+        progress_bar = None
+        if tqdm is not None and sys.stderr.isatty():
+            progress_bar = tqdm(total=CONFIG.calibration.max_iterations, desc="Heston calibration", leave=False)
 
         def objective_fn(vector: np.ndarray) -> float:
             params = self._from_vector(vector)
@@ -82,7 +91,12 @@ class JointHestonCalibrator:
 
         def callback(_: np.ndarray) -> None:
             iteration_counter["value"] += 1
-            self._logger.info("ITERATION | count=%d", iteration_counter["value"])
+            if progress_bar is not None:
+                progress_bar.update(1)
+            elif iteration_counter["value"] % 10 == 0:
+                self._logger.info("ITERATION | count=%d", iteration_counter["value"])
+
+        initial_objective = objective_fn(np.array(initial_guess, dtype=float))
 
         result: OptimizeResult = minimize(
             fun=objective_fn,
@@ -93,19 +107,38 @@ class JointHestonCalibrator:
             options={
                 "maxiter": CONFIG.calibration.max_iterations,
                 "ftol": CONFIG.calibration.tolerance,
+                "maxls": 60,
             },
         )
 
+        if progress_bar is not None:
+            progress_bar.close()
+
         if not result.success:
-            self._logger.error("CALIBRATION_FAILED | message=%s", result.message)
-            raise CalibrationError(
-                message="Joint Heston calibration failed",
-                context={
-                    "message": str(result.message),
-                    "iterations": int(result.nit),
-                    "objective": float(result.fun) if result.fun is not None else None,
-                },
-            )
+            result_message = str(result.message)
+            result_objective = float(result.fun) if result.fun is not None else float("inf")
+            has_finite_candidate = bool(result.x is not None and np.all(np.isfinite(result.x)) and np.isfinite(result_objective))
+            looks_like_linesearch_abort = "ABNORMAL" in result_message.upper() or "LINE SEARCH" in result_message.upper()
+            objective_is_reasonable = result_objective <= max(0.25, initial_objective * 0.98)
+
+            if has_finite_candidate and looks_like_linesearch_abort and objective_is_reasonable:
+                self._logger.warning(
+                    "CALIBRATION_ACCEPTED_WITH_ABORT | message=%s | iterations=%d | objective=%.8f | initial_objective=%.8f",
+                    result_message,
+                    int(result.nit),
+                    result_objective,
+                    initial_objective,
+                )
+            else:
+                self._logger.error("CALIBRATION_FAILED | message=%s", result_message)
+                raise CalibrationError(
+                    message="Joint Heston calibration failed",
+                    context={
+                        "message": result_message,
+                        "iterations": int(result.nit),
+                        "objective": result_objective if np.isfinite(result_objective) else None,
+                    },
+                )
 
         final_params = self._from_vector(np.array(result.x, dtype=float))
         final_metrics = self._objective.compute(

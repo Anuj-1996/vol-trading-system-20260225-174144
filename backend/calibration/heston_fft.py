@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from typing import Tuple
 
 import numpy as np
+from scipy.interpolate import PchipInterpolator
 from scipy.optimize import brentq
 from scipy.stats import norm
 
 from ..config import CONFIG
-from ..decorators import log_execution_time
 from ..logger import get_logger
 
 
@@ -118,7 +118,6 @@ class HestonFFTPricer:
 
         return implied_vols
 
-    @log_execution_time
     def price_calls_fft(
         self,
         spot: float,
@@ -131,7 +130,7 @@ class HestonFFTPricer:
         n = CONFIG.calibration.fft_grid_size
         eta = CONFIG.calibration.fft_eta
         alpha = CONFIG.calibration.alpha_damp
-        self._logger.info(
+        self._logger.debug(
             "START | price_calls_fft | maturity=%.6f | strike_count=%d | alpha=%.4f | kappa=%.6f | theta=%.6f | xi=%.6f | rho=%.6f | v0=%.6f",
             maturity,
             strikes.size,
@@ -173,10 +172,31 @@ class HestonFFTPricer:
         call_grid = np.exp(-alpha * log_strike_grid) * np.real(fft_values) / np.pi
 
         grid_strikes = np.exp(log_strike_grid)
-        prices = np.interp(strikes, grid_strikes, call_grid, left=call_grid[0], right=call_grid[-1])
+
+        finite_mask = np.isfinite(grid_strikes) & np.isfinite(call_grid)
+        grid_strikes = grid_strikes[finite_mask]
+        call_grid = call_grid[finite_mask]
+
+        if grid_strikes.size < 2 or call_grid.size < 2:
+            fallback_prices = np.full_like(strikes, fill_value=max(float(np.nanmean(call_grid)) if call_grid.size else 0.0, 0.0), dtype=float)
+            self._logger.warning("MODEL_GRID_FALLBACK | insufficient finite FFT points")
+            return fallback_prices
+
+        call_grid = np.maximum(call_grid, 0.0)
+
+        call_grid = np.maximum.accumulate(call_grid[::-1])[::-1]
+
+        log_grid = np.log(np.maximum(grid_strikes, 1e-12))
+        log_target = np.log(np.maximum(strikes, 1e-12))
+        interpolator = PchipInterpolator(log_grid, call_grid, extrapolate=False)
+        prices = interpolator(log_target)
+
+        left_value = float(call_grid[0])
+        right_value = float(call_grid[-1])
+        prices = np.where(np.isnan(prices), np.interp(log_target, log_grid, call_grid, left=left_value, right=right_value), prices)
         prices = np.maximum(prices, 0.0)
 
-        self._logger.info(
+        self._logger.debug(
             "END | price_calls_fft | min_price=%.6f | max_price=%.6f | strike_min=%.2f | strike_max=%.2f",
             prices.min(),
             prices.max(),

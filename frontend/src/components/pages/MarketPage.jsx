@@ -16,11 +16,13 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
 
   const rv20Series = hasHistory ? history.rv20_annualized : [];
   const rv60Series = hasHistory ? history.rv60_annualized : [];
+  const volumeSeries = hasHistory ? history.volume || [] : [];
+  const spotSpreadPct = market?.atm_iv && market?.rv_20d ? ((Number(market.atm_iv) - Number(market.rv_20d)) * 100) : 0;
 
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
       <div className="page-market-grid">
-        <div className="col-left">
+        <div className="market-price-wide">
           <Panel title="Price Chart">
             <Plot
               data={[
@@ -38,12 +40,20 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
                         decreasing: { line: { color: '#ef4444' } },
                       },
                       {
+                        type: 'bar',
+                        x: history.dates,
+                        y: volumeSeries,
+                        name: 'Volume',
+                        yaxis: 'y2',
+                        marker: { color: '#334155', opacity: 0.7 },
+                      },
+                      {
                         type: 'scatter',
                         mode: 'lines',
                         x: history.dates,
                         y: rv20Series,
                         name: '20D RV',
-                        yaxis: 'y2',
+                        yaxis: 'y3',
                         line: { color: '#38bdf8', width: 1.5 },
                       },
                       {
@@ -52,7 +62,7 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
                         x: history.dates,
                         y: rv60Series,
                         name: '60D RV',
-                        yaxis: 'y2',
+                        yaxis: 'y3',
                         line: { color: '#f59e0b', width: 1.5 },
                       },
                     ]
@@ -68,7 +78,7 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
                     ]),
               ]}
               layout={{
-                height: 220,
+                height: 360,
                 margin: { l: 36, r: 40, b: 28, t: 22 },
                 paper_bgcolor: '#0a0f19',
                 plot_bgcolor: '#0a0f19',
@@ -76,11 +86,19 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
                 xaxis: { title: 'Date', gridcolor: '#1f2937' },
                 yaxis: { title: 'Price', gridcolor: '#1f2937' },
                 yaxis2: {
+                  title: 'Volume',
+                  overlaying: 'y',
+                  side: 'right',
+                  showgrid: false,
+                  zeroline: false,
+                },
+                yaxis3: {
                   title: 'RV',
                   overlaying: 'y',
                   side: 'right',
                   gridcolor: '#1f2937',
                   tickformat: '.2f',
+                  position: 0.94,
                 },
                 showlegend: true,
               }}
@@ -91,8 +109,13 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
             <div className="kv-grid two-col compact">
               <div><span>20D RV</span><strong>{formatNumber(market?.rv_20d, 4)}</strong></div>
               <div><span>60D RV</span><strong>{formatNumber(market?.rv_60d, 4)}</strong></div>
+              <div><span>Volume (last)</span><strong>{formatNumber(volumeSeries[volumeSeries.length - 1], 0)}</strong></div>
+              <div><span>ATM IV - 20D RV (pts)</span><strong>{formatNumber(spotSpreadPct, 2)}</strong></div>
             </div>
           </Panel>
+        </div>
+
+        <div className="col-left">
           <Panel title="Realized Vol Metrics">
             <div className="kv-grid two-col">
               <div><span>10D RV</span><strong>{formatNumber(market?.rv_10d, 4)}</strong></div>
@@ -185,6 +208,33 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
               <div><span>IV-RV Spread</span><strong>{formatNumber(market?.realized_implied_spread, 6)}</strong></div>
               <div><span>VVIX Equivalent</span><strong>{formatNumber(market?.vvix_equivalent, 4)}</strong></div>
             </div>
+            <Plot
+              data={[
+                {
+                  type: 'bar',
+                  x: ['IV Rank', 'IV Pctl', 'RV Pctl'],
+                  y: [
+                    Number(market?.iv_rank ?? 0),
+                    Number(market?.iv_percentile ?? 0),
+                    Number(market?.rv_percentile ?? 0),
+                  ],
+                  marker: { color: ['#f59e0b', '#22c55e', '#38bdf8'] },
+                },
+              ]}
+              layout={{
+                height: 160,
+                margin: { l: 30, r: 12, b: 28, t: 8 },
+                paper_bgcolor: '#0a0f19',
+                plot_bgcolor: '#0a0f19',
+                font: { color: '#d1d5db', size: 10 },
+                xaxis: { gridcolor: '#1f2937' },
+                yaxis: { title: 'Percentile', gridcolor: '#1f2937', range: [0, 100] },
+                showlegend: false,
+              }}
+              config={{ displaylogo: false, responsive: true }}
+              style={{ width: '100%' }}
+              useResizeHandler
+            />
           </Panel>
         </div>
       </div>

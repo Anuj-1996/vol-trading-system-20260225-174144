@@ -32,8 +32,8 @@ class LiquidityConfig:
 class CalibrationConfig:
     max_iterations: int = 120
     tolerance: float = 1e-6
-    fft_grid_size: int = 2048
-    fft_eta: float = 0.15
+    fft_grid_size: int = 4096
+    fft_eta: float = 0.20
     alpha_damp: float = 1.5
     short_maturity_weight_multiplier: float = 1.5
     feller_penalty_weight: float = 10_000.0

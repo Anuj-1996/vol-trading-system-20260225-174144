@@ -307,6 +307,46 @@ class StrategyEngineService:
         )
         return model_matrix
 
+    def _build_open_interest_profile(
+        self,
+        filtered_records: List[Any],
+        expiry_list: Any,
+        strike_grid: np.ndarray,
+    ) -> Dict[str, Any]:
+        expiry_labels = [item.isoformat() for item in expiry_list]
+        strike_to_index = {float(strike): index for index, strike in enumerate(strike_grid.tolist())}
+        expiry_to_index = {expiry: index for index, expiry in enumerate(expiry_list)}
+
+        oi_matrix = np.zeros((len(expiry_list), strike_grid.size), dtype=float)
+
+        for record in filtered_records:
+            if getattr(record, "side", None) != "CALL":
+                continue
+            expiry_index = expiry_to_index.get(record.expiry)
+            strike_index = strike_to_index.get(float(record.strike))
+            if expiry_index is None or strike_index is None:
+                continue
+            oi_matrix[expiry_index, strike_index] += float(record.open_interest)
+
+        max_pain_by_expiry: List[float] = []
+        for expiry_index in range(oi_matrix.shape[0]):
+            weights = oi_matrix[expiry_index, :]
+            if np.sum(weights) <= 0:
+                max_pain_by_expiry.append(float(strike_grid[int(np.argmin(np.abs(strike_grid - strike_grid.mean())))]))
+                continue
+            payout = np.array([
+                float(np.sum(weights * np.abs(strike_grid - strike_candidate)))
+                for strike_candidate in strike_grid
+            ])
+            pain_index = int(np.argmin(payout))
+            max_pain_by_expiry.append(float(strike_grid[pain_index]))
+
+        return {
+            "expiry_labels": expiry_labels,
+            "open_interest_matrix": oi_matrix.tolist(),
+            "max_pain_by_expiry": max_pain_by_expiry,
+        }
+
     def run_static_pipeline(self, request: PipelineRequest) -> Dict[str, Any]:
         self._logger.info("START | run_static_pipeline | file=%s", request.file_path)
 
@@ -385,6 +425,11 @@ class StrategyEngineService:
             params=calibration_result.parameters,
         )
         residual_iv_matrix = model_iv_matrix - surface.implied_vol_matrix
+        oi_profile = self._build_open_interest_profile(
+            filtered_records=filtered,
+            expiry_list=surface.expiry_list,
+            strike_grid=surface.strike_grid,
+        )
         model_iv_min = float(np.nanmin(model_iv_matrix))
         model_iv_max = float(np.nanmax(model_iv_matrix))
         model_skew = np.gradient(model_iv_matrix, surface.strike_grid, axis=1)
@@ -434,6 +479,9 @@ class StrategyEngineService:
                 "market_iv_matrix": surface.implied_vol_matrix.tolist(),
                 "model_iv_matrix": model_iv_matrix.tolist(),
                 "residual_iv_matrix": residual_iv_matrix.tolist(),
+                "expiry_labels": oi_profile["expiry_labels"],
+                "open_interest_matrix": oi_profile["open_interest_matrix"],
+                "max_pain_by_expiry": oi_profile["max_pain_by_expiry"],
             },
             "calibration": {
                 "parameters": asdict(calibration_result.parameters),

@@ -14,10 +14,31 @@ export default function BacktestPage({ loading, activeSnapshotId, backtest }) {
   const equityCurve = Array.isArray(backtest.equity_curve) ? backtest.equity_curve : [];
   const drawdownCurve = Array.isArray(backtest.drawdown_curve) ? backtest.drawdown_curve : [];
   const metrics = backtest.metrics || {};
+  const controls = backtest.controls || {};
 
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
       <div className="page-backtest-grid">
+        <Panel title="Backtest Controls" className="backtest-controls">
+          <div className="filters-grid">
+            <label>Start date
+              <input type="text" value={controls.start_date || 'Auto'} readOnly />
+            </label>
+            <label>End date
+              <input type="text" value={controls.end_date || 'Auto'} readOnly />
+            </label>
+            <label>Rebalance frequency
+              <input type="text" value={controls.rebalance_frequency || 'Daily'} readOnly />
+            </label>
+            <label>Hedge frequency
+              <input type="text" value={controls.hedge_frequency || 'Daily'} readOnly />
+            </label>
+            <label>Slippage assumption
+              <input type="text" value={controls.slippage_assumption || '0.05%'} readOnly />
+            </label>
+          </div>
+        </Panel>
+
         <Panel title="Equity Curve">
           <Plot
             data={[{ type: 'scatter', mode: 'lines', x: equityCurve.map((_, index) => index), y: equityCurve, line: { color: '#22c55e', width: 2 } }]}
@@ -52,8 +73,11 @@ export default function BacktestPage({ loading, activeSnapshotId, backtest }) {
             useResizeHandler
           />
         </Panel>
-        <Panel title="Performance Metrics">
+        <Panel title="Performance Metrics" className="backtest-metrics">
           <table className="dense-table">
+            <thead>
+              <tr><th>Metric</th><th>Value</th></tr>
+            </thead>
             <tbody>
               <tr><td>CAGR</td><td>{formatNumber(metrics.cagr, 4)}</td></tr>
               <tr><td>Sharpe</td><td>{formatNumber(metrics.sharpe, 4)}</td></tr>

@@ -5,13 +5,15 @@ import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
 export default function PortfolioPage({ loading, activeSnapshotId, portfolio }) {
   const totals = portfolio?.totals || { pnl: 0, delta: 0, gamma: 0, vega: 0 };
   const positions = Array.isArray(portfolio?.positions) ? portfolio.positions : [];
+  const dailyPnl = Number(portfolio?.daily_pnl ?? totals.pnl ?? 0);
+  const totalMargin = positions.reduce((acc, row) => acc + Number(row?.margin_required ?? 0), 0);
 
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
       <div className="page-portfolio-grid">
         <div className="portfolio-top">
           <Panel title="Total PnL"><div className="metric-big">{formatNumber(totals.pnl, 2)}</div></Panel>
-          <Panel title="Daily PnL"><div className="metric-big">{formatNumber(totals.pnl, 2)}</div></Panel>
+          <Panel title="Daily PnL"><div className="metric-big">{formatNumber(dailyPnl, 2)}</div></Panel>
           <Panel title="Total Vega"><div className="metric-big">{formatNumber(totals.vega, 2)}</div></Panel>
           <Panel title="Total Gamma"><div className="metric-big">{formatNumber(totals.gamma, 2)}</div></Panel>
           <Panel title="Total Delta"><div className="metric-big">{formatNumber(totals.delta, 2)}</div></Panel>
@@ -28,6 +30,7 @@ export default function PortfolioPage({ loading, activeSnapshotId, portfolio }) 
                   <th>PnL</th>
                   <th>Delta</th>
                   <th>Vega</th>
+                  <th>Gamma</th>
                   <th>Margin</th>
                 </tr>
               </thead>
@@ -40,6 +43,7 @@ export default function PortfolioPage({ loading, activeSnapshotId, portfolio }) 
                     <td>{formatNumber(item.expected_value, 2)}</td>
                     <td>{formatNumber(item.delta_exposure, 3)}</td>
                     <td>{formatNumber(item.vega_exposure, 3)}</td>
+                    <td>{formatNumber(item.gamma_exposure, 3)}</td>
                     <td>{formatNumber(item.margin_required, 2)}</td>
                   </tr>
                 ))}
@@ -62,6 +66,10 @@ export default function PortfolioPage({ loading, activeSnapshotId, portfolio }) 
             style={{ width: '100%' }}
             useResizeHandler
           />
+          <div className="kv-grid one-col compact">
+            <div><span>Portfolio Margin</span><strong>{formatNumber(totalMargin, 2)}</strong></div>
+            <div><span>Open Positions</span><strong>{positions.length}</strong></div>
+          </div>
         </Panel>
       </div>
     </SnapshotGuard>

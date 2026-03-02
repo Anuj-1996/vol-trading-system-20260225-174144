@@ -5,6 +5,7 @@ import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
 export default function StrategyDetailPage({ loading, activeSnapshotId, strategies, selectedStrategyId, risk, market }) {
   const items = Array.isArray(strategies?.items) ? strategies.items : [];
   const selected = items.find((item) => item.id === selectedStrategyId) || items[0] || null;
+  const spot = Number(market?.spot ?? 0);
 
   const pnlDist = useMemo(() => {
     if (Array.isArray(selected?.pnl_distribution) && selected.pnl_distribution.length) {
@@ -21,12 +22,19 @@ export default function StrategyDetailPage({ loading, activeSnapshotId, strategi
     { name: 'Time Decay 1W', value: Number(risk?.stress?.time_decay_1w ?? 0) },
   ];
 
+  const payoffAxis = Array.from({ length: 41 }, (_, index) => spot * (0.85 + index * 0.0075));
+  const selectedDelta = Number(selected?.delta_exposure ?? 0);
+  const selectedGamma = Number(selected?.gamma_exposure ?? 0);
+
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
       <div className="page-detail-grid">
         <Panel title="Payoff At Expiry">
           <Plot
-            data={[{ type: 'scatter', mode: 'lines+markers', x: selected?.strikes || [], y: (selected?.strikes || []).map((strike) => (Number(strike) - Number(market?.spot || 0)) * Number(selected?.delta_exposure || 0)), line: { color: '#38bdf8', width: 2 } }]}
+            data={[{ type: 'scatter', mode: 'lines', x: payoffAxis, y: payoffAxis.map((nodeSpot) => {
+              const displacement = (nodeSpot - spot) / Math.max(spot, 1e-8);
+              return Number(selected?.expected_value ?? 0) + selectedDelta * displacement * spot + 0.5 * selectedGamma * displacement * displacement * spot;
+            }), line: { color: '#38bdf8', width: 2 } }]}
             layout={{
               height: 220,
               margin: { l: 32, r: 12, b: 24, t: 18 },
@@ -128,6 +136,25 @@ export default function StrategyDetailPage({ loading, activeSnapshotId, strategi
               ))}
             </tbody>
           </table>
+        </Panel>
+
+        <Panel title="Stress Scenario Bars">
+          <Plot
+            data={[{ type: 'bar', x: stressRows.map((row) => row.name), y: stressRows.map((row) => row.value), marker: { color: stressRows.map((row) => (row.value >= 0 ? '#22c55e' : '#f43f5e')) } }]}
+            layout={{
+              height: 220,
+              margin: { l: 32, r: 12, b: 30, t: 18 },
+              paper_bgcolor: '#0a0f19',
+              plot_bgcolor: '#0a0f19',
+              font: { color: '#d1d5db', size: 11 },
+              xaxis: { gridcolor: '#1f2937' },
+              yaxis: { title: 'PnL Impact', gridcolor: '#1f2937' },
+              showlegend: false,
+            }}
+            config={{ displaylogo: false, responsive: true }}
+            style={{ width: '100%' }}
+            useResizeHandler
+          />
         </Panel>
 
         <Panel title="Risk Decomposition Pie">

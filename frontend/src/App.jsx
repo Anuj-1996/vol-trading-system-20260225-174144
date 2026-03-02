@@ -4,6 +4,7 @@ import {
   getRecentLogs,
   getSnapshotModule,
   runDynamicForSnapshot,
+  runLiveForSnapshot,
   runStaticForSnapshot,
 } from './api/client';
 import BacktestPage from './components/pages/BacktestPage';
@@ -19,9 +20,9 @@ import { useSnapshotStore } from './store/useSnapshotStore';
 const INITIAL_FORM = {
   file_path: 'NIFTY_2026-03-02_option_chain_2026-02-24-11-20-47.csv',
   db_path: 'backend/vol_engine.db',
-  spot: 25424.65,
-  risk_free_rate: 0.06,
-  dividend_yield: 0.0,
+  spot: 0,
+  risk_free_rate: 0.065,
+  dividend_yield: 0.012,
   capital_limit: 500000,
   strike_increment: 50,
   max_legs: 4,
@@ -78,6 +79,8 @@ export default function App() {
   const [modelSelection, setModelSelection] = useState('Heston');
   const [confidenceLevel, setConfidenceLevel] = useState(99);
   const [scoreWeights, setScoreWeights] = useState('EV:0.30, VaR:0.25, ES:0.20, RoM:0.15, Fragility:0.10');
+  const [liveMetadata, setLiveMetadata] = useState(null);
+  const [fetchProgress, setFetchProgress] = useState('');
 
   const {
     activeSnapshotId,
@@ -204,6 +207,50 @@ export default function App() {
       setBackendStatus('disconnected');
       setDynamicState('failed');
       setError(requestError.message || 'Dynamic snapshot creation failed.');
+      await fetchLogsOnce();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runLive = async () => {
+    clearError();
+    setLoading(true);
+    setFetchProgress('Connecting to NSE...');
+    try {
+      await ensureBackend();
+      setFetchProgress('Fetching live option chain...');
+
+      const pipelineParams = {
+        risk_free_rate: Number(form.risk_free_rate),
+        dividend_yield: Number(form.dividend_yield),
+        capital_limit: Number(form.capital_limit),
+        strike_increment: Number(form.strike_increment),
+        max_legs: Number(form.max_legs),
+        max_width: Number(form.max_width),
+        simulation_paths: Number(form.simulation_paths),
+        simulation_steps: Number(form.simulation_steps),
+      };
+
+      const { snapshotId, fallbackModules, liveMetadata: meta } =
+        await runLiveForSnapshot(underlying, pipelineParams);
+
+      setLiveMetadata(meta);
+      setForm((prev) => ({ ...prev, spot: meta.spot }));
+      setActiveSnapshotId(snapshotId);
+      if (fallbackModules) {
+        setSnapshotData({
+          ...fallbackModules,
+          selectedStrategyId: fallbackModules.strategies?.items?.[0]?.id || null,
+        });
+      }
+      await loadSnapshotModules(snapshotId);
+      setFetchProgress('');
+      await fetchLogsOnce();
+    } catch (requestError) {
+      setBackendStatus('disconnected');
+      setError(requestError.message || 'Live NSE pipeline failed.');
+      setFetchProgress('');
       await fetchLogsOnce();
     } finally {
       setLoading(false);
@@ -407,6 +454,7 @@ export default function App() {
             Underlying
             <select value={underlying} onChange={(event) => setUnderlying(event.target.value)}>
               <option value="NIFTY">NIFTY</option>
+              <option value="BANKNIFTY">BANKNIFTY</option>
             </select>
           </label>
           <label>
@@ -419,13 +467,16 @@ export default function App() {
               ))}
             </select>
           </label>
-          <div className="top-metric"><span>Spot</span><strong>{formatNumber(market?.spot, 2)}</strong></div>
+          <div className="top-metric"><span>Spot</span><strong>{formatNumber(market?.spot || form.spot, 2)}</strong></div>
           <div className="top-metric"><span>IV ATM</span><strong>{formatNumber((market?.atm_iv || 0) * 100, 2)}</strong></div>
           <div className="top-metric"><span>Regime</span><strong>{market?.regime?.label || '-'}</strong></div>
-          <div className="top-metric"><span>Model</span><strong className={backendStatusClass}>{backendStatus}</strong></div>
+          <div className="top-metric"><span>Source</span><strong className={liveMetadata ? 'status-text-ok' : 'status-text-warn'}>{liveMetadata ? 'NSE Live' : 'CSV'}</strong></div>
           <div className="top-metric"><span>Clock</span><strong>{clockValue.toLocaleTimeString()}</strong></div>
-          <button type="button" className="action-btn" onClick={runStatic} disabled={loading}>Run Static</button>
-          <button type="button" className="action-btn accent" onClick={runDynamic} disabled={loading}>Run Dynamic</button>
+          {fetchProgress ? <div className="top-metric"><span>{fetchProgress}</span></div> : null}
+          <button type="button" className="action-btn accent" onClick={runLive} disabled={loading}>
+            {loading ? 'Running...' : 'Fetch Live & Analyse'}
+          </button>
+          <button type="button" className="action-btn" onClick={runStatic} disabled={loading}>Run CSV</button>
         </header>
 
         {error ? <div className="error-box">{error}</div> : null}
@@ -434,9 +485,9 @@ export default function App() {
 
         <footer className="bottom-strip">
           <div><span>Job status</span><strong>{dynamicState}</strong></div>
-          <div><span>Model status</span><strong className={backendStatusClass}>{backendStatus}</strong></div>
-          <div><span>Calibration status</span><strong className={calibrationStatusClass}>{market ? 'loaded' : 'pending'}</strong></div>
-          <div><span>Data latency</span><strong>{activeSnapshotId ? 'snapshot_live' : 'no_snapshot'}</strong></div>
+          <div><span>Backend</span><strong className={backendStatusClass}>{backendStatus}</strong></div>
+          <div><span>Data</span><strong className={calibrationStatusClass}>{liveMetadata ? `NSE ${liveMetadata.symbol}` : (market ? 'CSV loaded' : 'pending')}</strong></div>
+          <div><span>Records</span><strong>{liveMetadata ? liveMetadata.quality_report?.total_cleaned ?? '-' : (market?.ingestion?.record_count ?? '-')}</strong></div>
           <div><span>Snapshot</span><strong>{activeSnapshotId || '-'}</strong></div>
         </footer>
       </div>

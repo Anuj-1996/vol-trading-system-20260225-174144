@@ -7,10 +7,17 @@ export function formatNumber(value, digits = 2) {
   return Number(value).toFixed(digits);
 }
 
-export function Panel({ title, children, className = '' }) {
+export function Panel({ title, children, className = '', onMaximize }) {
   return (
     <section className={`bbg-panel ${className}`.trim()}>
-      <header className="bbg-panel-header">{title}</header>
+      <header className="bbg-panel-header">
+        <span>{title}</span>
+        {onMaximize && (
+          <button className="maximize-btn" onClick={onMaximize} title="Maximize" type="button">
+            ⛶
+          </button>
+        )}
+      </header>
       <div className="bbg-panel-body">{children}</div>
     </section>
   );

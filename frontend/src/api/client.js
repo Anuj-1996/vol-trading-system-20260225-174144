@@ -247,3 +247,58 @@ export async function checkBackendHealth() {
 export async function getRecentLogs(lineCount = 120) {
   return request(`/logs/recent?lines=${lineCount}`);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NSE Live Data
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function fetchLiveNSEData(symbol = 'NIFTY', expiries = null) {
+  return request('/data/fetch-live', {
+    method: 'POST',
+    body: JSON.stringify({ symbol, expiries }),
+  });
+}
+
+export async function getNSEExpiries(symbol = 'NIFTY') {
+  return request(`/data/expiries?symbol=${encodeURIComponent(symbol)}`);
+}
+
+export async function runLiveStaticPipeline(payload) {
+  return request('/pipeline/live-static', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function runLiveForSnapshot(symbol = 'NIFTY', pipelineParams = {}) {
+  // Step 1: Fetch live data from NSE
+  const fetchResponse = await fetchLiveNSEData(symbol);
+  const { data_id, spot, quality_report, expiry_dates } = fetchResponse.data;
+
+  // Step 2: Run the pipeline on the cached live data
+  const pipelinePayload = {
+    data_id,
+    risk_free_rate: 0.065,
+    dividend_yield: 0.012,
+    capital_limit: 500000,
+    strike_increment: 50,
+    max_legs: 4,
+    max_width: 1000,
+    simulation_paths: 30000,
+    simulation_steps: 64,
+    ...pipelineParams,
+  };
+  const pipelineResponse = await runLiveStaticPipeline(pipelinePayload);
+
+  // Step 3: Normalize into snapshot modules (reuse existing function)
+  const snapshotId = `live-${Date.now()}`;
+  const modules = normalizeSnapshotModules(pipelineResponse.data);
+  cacheSnapshot(snapshotId, modules);
+
+  return {
+    snapshotId,
+    backendSnapshot: false,
+    fallbackModules: modules,
+    liveMetadata: { data_id, spot, quality_report, expiry_dates, symbol },
+  };
+}

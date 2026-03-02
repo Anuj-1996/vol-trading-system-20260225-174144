@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,10 @@ from ..calibration.joint_calibrator import JointHestonCalibrator
 from ..calibration.heston_fft import HestonFFTPricer
 from ..config import CONFIG
 from ..data.ingestion import OptionChainIngestionService
+from ..data.models import OptionChainRawRecord
+from ..data.nse_client import NSEClient
+from ..data.nse_cleaner import NSEDataCleaner
+from ..data.nse_fetcher import FetchResult, NSEOptionChainFetcher
 from ..data.repository import OptionChainRepository
 from ..evaluation.fragility_engine import FragilityEngine
 from ..evaluation.ranking_engine import RankedStrategy, RankingEngine
@@ -40,6 +45,26 @@ class PipelineRequest:
     simulation_steps: int
 
 
+@dataclass(frozen=True)
+class LivePipelineRequest:
+    """Request for running the pipeline on live NSE data (no file_path / spot needed)."""
+    data_id: str
+    db_path: str = "backend/vol_engine.db"
+    risk_free_rate: float = 0.065
+    dividend_yield: float = 0.012
+    capital_limit: float = 500000
+    strike_increment: int = 50
+    max_legs: int = 4
+    max_width: float = 1000
+    simulation_paths: int = 5000
+    simulation_steps: int = 32
+
+
+# In-memory cache for fetched NSE data (data_id -> FetchResult + cleaned records)
+_live_data_cache: Dict[str, Dict[str, Any]] = {}
+_cache_lock = threading.Lock()
+
+
 class StrategyEngineService:
     def __init__(self) -> None:
         self._logger = get_logger(self.__class__.__name__)
@@ -55,6 +80,282 @@ class StrategyEngineService:
         self._ranking = RankingEngine()
         self._regime = RegimeClassifier()
         self._dynamic_hedge = DynamicHedgingEngine()
+        self._nse_client = NSEClient()
+        self._nse_fetcher = NSEOptionChainFetcher(client=self._nse_client)
+        self._nse_cleaner = NSEDataCleaner()
+
+    # ------------------------------------------------------------------
+    # NSE Live Data: Fetch + Cache
+    # ------------------------------------------------------------------
+
+    def fetch_nse_live_data(
+        self,
+        symbol: str = "NIFTY",
+        expiries: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Fetch live data from NSE, clean it, cache it, and return summary.
+
+        Parameters
+        ----------
+        symbol : str
+            Index symbol ("NIFTY" or "BANKNIFTY")
+        expiries : list[str] or None
+            If None or ["all"], fetches all future expiries.
+            Otherwise fetches only the specified expiry strings.
+
+        Returns
+        -------
+        dict with: data_id, spot, timestamp, expiry_dates, record_count,
+                   quality_report, symbol
+        """
+        self._logger.info("FETCH_NSE_LIVE | symbol=%s | expiries=%s", symbol, expiries)
+
+        if expiries is None or expiries == ["all"] or not expiries:
+            fetch_result = self._nse_fetcher.fetch_all_expiries(symbol=symbol)
+        else:
+            # Fetch single expiry
+            fetch_result = self._nse_fetcher.fetch_single_expiry(
+                symbol=symbol,
+                expiry_date=expiries[0],
+            )
+
+        # Clean the data
+        clean_result = self._nse_cleaner.clean(
+            records=fetch_result.records,
+            spot=fetch_result.spot,
+        )
+
+        # Generate cache key
+        import time
+        data_id = f"nse_{symbol.lower()}_{int(time.time())}"
+
+        # Cache for pipeline use
+        with _cache_lock:
+            _live_data_cache[data_id] = {
+                "fetch_result": fetch_result,
+                "cleaned_records": clean_result.cleaned_records,
+                "quality_report": clean_result.quality_report,
+                "spot": fetch_result.spot,
+                "symbol": symbol,
+            }
+
+        self._logger.info(
+            "FETCH_NSE_LIVE | CACHED | data_id=%s | records=%d | spot=%.2f",
+            data_id,
+            len(clean_result.cleaned_records),
+            fetch_result.spot,
+        )
+
+        return {
+            "data_id": data_id,
+            "spot": fetch_result.spot,
+            "timestamp": fetch_result.timestamp,
+            "expiry_dates": fetch_result.expiry_dates,
+            "record_count": len(clean_result.cleaned_records),
+            "raw_entry_count": fetch_result.raw_entry_count,
+            "quality_report": clean_result.quality_report,
+            "symbol": symbol,
+        }
+
+    def get_cached_nse_data(self, data_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve cached NSE data by data_id. Returns None if not found."""
+        with _cache_lock:
+            return _live_data_cache.get(data_id)
+
+    # ------------------------------------------------------------------
+    # Live Pipeline: Run analysis on cached NSE data
+    # ------------------------------------------------------------------
+
+    def run_live_pipeline(self, request: LivePipelineRequest) -> Dict[str, Any]:
+        """
+        Run the full static pipeline on cached live NSE data.
+
+        This is identical to run_static_pipeline but uses pre-fetched
+        NSE data instead of a CSV file. Spot comes from the NSE feed.
+        """
+        self._logger.info("START | run_live_pipeline | data_id=%s", request.data_id)
+
+        cached = self.get_cached_nse_data(request.data_id)
+        if cached is None:
+            raise ValueError(
+                f"No cached NSE data for data_id={request.data_id}. "
+                "Fetch data first via /api/v1/data/fetch-live."
+            )
+
+        raw_records: List[OptionChainRawRecord] = cached["cleaned_records"]
+        spot: float = cached["spot"]
+        symbol: str = cached.get("symbol", "NIFTY")
+
+        if not raw_records:
+            raise ValueError("Cached NSE data contains no records after cleaning.")
+
+        self._logger.info(
+            "LIVE_PIPELINE | data_id=%s | records=%d | spot=%.2f",
+            request.data_id,
+            len(raw_records),
+            spot,
+        )
+
+        # Upsert into SQLite (same as CSV path)
+        repository = OptionChainRepository(db_path=Path(request.db_path))
+        repository.ensure_schema()
+        repository.upsert_raw_records(raw_records)
+
+        # From here: IDENTICAL to run_static_pipeline
+        filtered = self._liquidity_filter.filter_records(records=raw_records, spot=spot)
+        surface = self._surface_builder.build_surface(records=filtered)
+
+        calibration_result = self._calibrator.calibrate(
+            market_surface=surface,
+            filtered_records=filtered,
+            spot=spot,
+            rate=request.risk_free_rate,
+            dividend_yield=request.dividend_yield,
+        )
+
+        maturity = float(np.max(surface.maturity_grid))
+        simulation_result = self._monte_carlo.simulate(
+            params=calibration_result.parameters,
+            spot=spot,
+            maturity=maturity,
+            risk_free_rate=request.risk_free_rate,
+            path_count=request.simulation_paths,
+            time_steps=request.simulation_steps,
+            full_path=False,
+        )
+
+        constraints = StrategyConstraints(
+            capital_limit=request.capital_limit,
+            strike_increment=request.strike_increment,
+            max_legs=request.max_legs,
+            max_width=request.max_width,
+            max_combinations_per_strategy=CONFIG.strategy.max_combinations_per_strategy,
+        )
+        strike_set = self._select_candidate_strikes(
+            strikes=sorted({item.strike for item in filtered}),
+            spot=spot,
+        )
+        strategies = self._generate_strategies(constraints=constraints, strike_set=strike_set)
+
+        metrics, pnl_distributions = self._static_eval.evaluate(
+            strategies=strategies,
+            terminal_prices=simulation_result.terminal_prices,
+            spot=spot,
+        )
+
+        fragility_scores: Dict[str, float] = {}
+        for metric in metrics:
+            key = f"{metric.strategy_type}:{metric.strikes}"
+            fragility_input = pnl_distributions.get(key, np.array([], dtype=float))
+            fragility_scores[key] = self._fragility.compute_fragility(fragility_input)
+
+        returns_proxy = np.diff(np.log(np.sort(simulation_result.terminal_prices)))
+        regime = self._regime.classify(returns_proxy)
+        ranked: List[RankedStrategy] = self._ranking.rank(
+            metrics=metrics,
+            fragility_scores=fragility_scores,
+            regime_weights=regime.ranking_weights,
+        )
+
+        model_iv_matrix = self._build_model_surface_matrix(
+            spot=spot,
+            rate=request.risk_free_rate,
+            dividend_yield=request.dividend_yield,
+            maturity_grid=surface.maturity_grid,
+            strike_grid=surface.strike_grid,
+            params=calibration_result.parameters,
+        )
+        residual_iv_matrix = model_iv_matrix - surface.implied_vol_matrix
+        oi_profile = self._build_open_interest_profile(
+            filtered_records=filtered,
+            expiry_list=surface.expiry_list,
+            strike_grid=surface.strike_grid,
+        )
+
+        atm_index = int(np.argmin(np.abs(surface.strike_grid - spot)))
+        near_index = int(np.argmin(surface.maturity_grid))
+        atm_market_iv = float(surface.implied_vol_matrix[near_index, atm_index])
+        atm_model_iv = float(model_iv_matrix[near_index, atm_index])
+
+        # Use symbol to determine yfinance ticker — pass symbol to _fetch_market_history_metrics
+        # which will map it via _map_underlying_to_ticker (checks for NIFTY/BANKNIFTY in string)
+        history_metrics = self._fetch_market_history_metrics(symbol, atm_market_iv)
+        rv_reference = history_metrics["rv_20d"] if history_metrics["rv_20d"] is not None else atm_model_iv
+        realized_implied_spread = float(atm_market_iv - rv_reference)
+        strategy_margin_lookup = {
+            (strategy.strategy_type, strategy.strikes): float(strategy.margin)
+            for strategy in strategies
+        }
+
+        response = {
+            "ingestion": self._ingestion.build_ingestion_report(raw_records),
+            "market_overview": {
+                "spot": spot,
+                "atm_market_iv": atm_market_iv,
+                "atm_model_iv": atm_model_iv,
+                "realized_implied_spread": realized_implied_spread,
+                "ticker": history_metrics["ticker"],
+                "rv_10d": history_metrics["rv_10d"],
+                "rv_20d": history_metrics["rv_20d"],
+                "rv_60d": history_metrics["rv_60d"],
+                "rv_percentile": history_metrics["rv_percentile"],
+                "iv_rank": history_metrics["iv_rank"],
+                "iv_percentile": history_metrics["iv_percentile"],
+                "vvix_equivalent": history_metrics["vvix_equivalent"],
+                "price_history": history_metrics["price_history"],
+                "data_source": "nse_live",
+                "nse_timestamp": cached["fetch_result"].timestamp,
+            },
+            "surface": {
+                "strike_grid": surface.strike_grid.tolist(),
+                "maturity_grid": surface.maturity_grid.tolist(),
+                "market_iv_matrix": surface.implied_vol_matrix.tolist(),
+                "model_iv_matrix": model_iv_matrix.tolist(),
+                "residual_iv_matrix": residual_iv_matrix.tolist(),
+                "expiry_labels": oi_profile["expiry_labels"],
+                "open_interest_matrix": oi_profile["open_interest_matrix"],
+                "max_pain_by_expiry": oi_profile["max_pain_by_expiry"],
+            },
+            "calibration": {
+                "parameters": asdict(calibration_result.parameters),
+                "weighted_rmse": calibration_result.metrics.weighted_rmse,
+                "iterations": calibration_result.iterations,
+                "converged": calibration_result.converged,
+            },
+            "regime": {"label": regime.label, "confidence": regime.confidence},
+            "top_strategies": [
+                {
+                    "strategy_type": item.metrics.strategy_type,
+                    "strikes": item.metrics.strikes,
+                    "overall_score": item.overall_score,
+                    "cost": strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0),
+                    "margin_required": strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0),
+                    "expected_value": item.metrics.expected_value,
+                    "var_95": item.metrics.var_95,
+                    "var_99": item.metrics.var_99,
+                    "expected_shortfall": item.metrics.expected_shortfall,
+                    "return_on_margin": item.metrics.return_on_margin,
+                    "probability_of_loss": item.metrics.probability_of_loss,
+                    "pnl_kurtosis": item.metrics.pnl_kurtosis,
+                    "max_loss": item.metrics.max_loss,
+                    "delta_exposure": item.metrics.delta_exposure,
+                    "gamma_exposure": item.metrics.gamma_exposure,
+                    "vega_exposure": item.metrics.vega_exposure,
+                    "theta_exposure": item.metrics.theta_exposure,
+                    "skew_exposure": item.metrics.skew_exposure,
+                    "break_even_levels": list(item.metrics.strikes),
+                    "pnl_distribution": pnl_distributions.get(
+                        f"{item.metrics.strategy_type}:{item.metrics.strikes}",
+                        np.array([], dtype=float),
+                    )[:1200].tolist(),
+                    "fragility_score": item.fragility_score,
+                }
+                for item in ranked
+            ],
+        }
+        self._logger.info("END | run_live_pipeline")
+        return response
 
     def _map_underlying_to_ticker(self, file_path: str) -> str:
         file_upper = Path(file_path).name.upper()

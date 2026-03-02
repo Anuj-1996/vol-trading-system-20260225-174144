@@ -1,6 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import ReactDOM from 'react-dom';
 import Plot from 'react-plotly.js';
 import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
+
+const SHORT_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function formatExpiryLabel(label) {
+  const m = String(label).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    return `${parseInt(m[3],10)} ${SHORT_MONTHS[parseInt(m[2],10)-1]} ${m[1].slice(2)}`;
+  }
+  return String(label);
+}
 
 function movingAverage(values, windowSize = 5) {
   const source = Array.isArray(values) ? values.map((item) => Number(item)) : [];
@@ -153,12 +163,28 @@ export default function SurfacePage({
   const [sliceExpiryIndex, setSliceExpiryIndex] = useState(0);
   const [sliceStrikeIndex, setSliceStrikeIndex] = useState(0);
   const [logMoneyness, setLogMoneyness] = useState(false);
+  const [maximizedChart, setMaximizedChart] = useState(null);
 
   const strikeGrid = Array.isArray(surface?.strike_grid) ? surface.strike_grid : [];
   const maturityGrid = Array.isArray(surface?.maturity_grid) ? surface.maturity_grid : [];
   const expiryLabels = Array.isArray(surface?.expiry_labels)
     ? surface.expiry_labels
     : maturityGrid.map((value) => `${Math.max(1, Math.round(Number(value) * 365))}D`);
+  const formattedExpiryLabels = useMemo(() => expiryLabels.map(formatExpiryLabel), [expiryLabels]);
+
+  // 2D text array for market surface hover (rows = expiries, cols = strikes)
+  const marketExpiryText = useMemo(
+    () => maturityGrid.map((_, ri) => strikeGrid.map(() => formattedExpiryLabels[ri] || '')),
+    [maturityGrid, strikeGrid, formattedExpiryLabels],
+  );
+
+  // Y-axis scene config for 3D charts: show expiry labels instead of numeric years
+  const expiryYAxis = useMemo(() => ({
+    title: 'Expiry',
+    tickvals: maturityGrid,
+    ticktext: formattedExpiryLabels,
+  }), [maturityGrid, formattedExpiryLabels]);
+
   const openInterestMatrix = Array.isArray(surface?.open_interest_matrix) ? surface.open_interest_matrix : [];
   const maxPainByExpiry = Array.isArray(surface?.max_pain_by_expiry) ? surface.max_pain_by_expiry : [];
   const marketMatrix = Array.isArray(surface?.market_iv_matrix) ? surface.market_iv_matrix : [];
@@ -209,7 +235,7 @@ export default function SurfacePage({
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
       <div className="page-surface-grid">
         <div className="surface-hero">
-          <Panel title="Market + Model Combined Surface 3D">
+          <Panel title="Market + Model Combined Surface 3D" onMaximize={() => setMaximizedChart('hero')}>
             <Plot
               data={singleExpiry
                 ? [
@@ -217,8 +243,8 @@ export default function SurfacePage({
                     { type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: smoothedModelMatrix[0] || [], line: { color: '#f59e0b', width: 2, shape: 'spline', smoothing: 1.1 }, name: 'Model Smile' },
                   ]
                 : [
-                    { type: 'surface', x: strikeGrid, y: maturityGrid, z: marketMatrix, colorscale: 'Viridis', opacity: 0.92, showscale: false, name: 'Market' },
-                    { type: 'surface', x: denseModelSurface.strikeDense, y: denseModelSurface.maturityDense, z: denseModelSurface.matrixDense, colorscale: 'Portland', opacity: 0.72, showscale: true, name: 'Model' },
+                    { type: 'surface', x: strikeGrid, y: maturityGrid, z: marketMatrix, colorscale: 'Viridis', opacity: 0.92, showscale: false, name: 'Market', text: marketExpiryText, hovertemplate: 'Strike: %{x:.0f}<br>Expiry: %{text}<br>IV: %{z:.4f}<extra>Market</extra>' },
+                    { type: 'surface', x: denseModelSurface.strikeDense, y: denseModelSurface.maturityDense, z: denseModelSurface.matrixDense, colorscale: 'Portland', opacity: 0.72, showscale: true, name: 'Model', hovertemplate: 'Strike: %{x:.0f}<br>IV: %{z:.4f}<extra>Model</extra>' },
                   ]}
               layout={{
                 height: 360,
@@ -232,7 +258,7 @@ export default function SurfacePage({
                       annotations: [{ xref: 'paper', yref: 'paper', x: 0.02, y: 0.95, text: 'Single expiry: rendering smile slice', showarrow: false, font: { color: '#9ca3af', size: 10 } }],
                     }
                   : {
-                      scene: { xaxis: { title: 'Strike' }, yaxis: { title: 'Maturity' }, zaxis: { title: 'IV' }, bgcolor: '#0a0f19' },
+                      scene: { xaxis: { title: 'Strike' }, yaxis: expiryYAxis, zaxis: { title: 'IV' }, bgcolor: '#0a0f19' },
                     }),
               }}
               config={{ displaylogo: false, responsive: true }}
@@ -242,11 +268,11 @@ export default function SurfacePage({
           </Panel>
         </div>
 
-        <Panel title="Market IV Surface 3D">
+        <Panel title="Market IV Surface 3D" onMaximize={() => setMaximizedChart('market')}>
           <Plot
             data={singleExpiry
               ? [{ type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: marketMatrix[0] || [], line: { color: '#22c55e', width: 2 }, name: 'Market Smile' }]
-              : [{ type: 'surface', x: strikeGrid, y: maturityGrid, z: marketMatrix, colorscale: 'Viridis' }]}
+              : [{ type: 'surface', x: strikeGrid, y: maturityGrid, z: marketMatrix, colorscale: 'Viridis', text: marketExpiryText, hovertemplate: 'Strike: %{x:.0f}<br>Expiry: %{text}<br>IV: %{z:.4f}<extra></extra>' }]}
             layout={{
               height: 260,
               margin: { l: 20, r: 20, b: 20, t: 20 },
@@ -258,7 +284,7 @@ export default function SurfacePage({
                     yaxis: { title: 'IV', gridcolor: '#1f2937' },
                   }
                 : {
-                    scene: { xaxis: { title: 'Strike' }, yaxis: { title: 'Maturity' }, zaxis: { title: 'IV' }, bgcolor: '#0a0f19' },
+                    scene: { xaxis: { title: 'Strike' }, yaxis: expiryYAxis, zaxis: { title: 'IV' }, bgcolor: '#0a0f19' },
                   }),
             }}
             config={{ displaylogo: false, responsive: true }}
@@ -267,7 +293,7 @@ export default function SurfacePage({
           />
         </Panel>
 
-        <Panel title="Model IV Surface 3D">
+        <Panel title="Model IV Surface 3D" onMaximize={() => setMaximizedChart('model')}>
           <Plot
             data={singleExpiry
               ? [{ type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: smoothedModelMatrix[0] || [], line: { color: '#f59e0b', width: 2, shape: 'spline', smoothing: 1.1 }, name: 'Model Smile' }]
@@ -281,6 +307,7 @@ export default function SurfacePage({
                   contours: {
                     z: { show: false },
                   },
+                  hovertemplate: 'Strike: %{x:.0f}<br>IV: %{z:.4f}<extra>Model</extra>',
                 }]}
             layout={{
               height: 260,
@@ -294,7 +321,7 @@ export default function SurfacePage({
                     annotations: [{ xref: 'paper', yref: 'paper', x: 0.02, y: 0.95, text: 'Single expiry: rendering smile slice', showarrow: false, font: { color: '#9ca3af', size: 10 } }],
                   }
                 : {
-                    scene: { xaxis: { title: 'Strike' }, yaxis: { title: 'Maturity' }, zaxis: { title: 'IV' }, bgcolor: '#0a0f19' },
+                    scene: { xaxis: { title: 'Strike' }, yaxis: expiryYAxis, zaxis: { title: 'IV' }, bgcolor: '#0a0f19' },
                   }),
             }}
             config={{ displaylogo: false, responsive: true }}
@@ -463,7 +490,7 @@ export default function SurfacePage({
                 {
                   type: 'scatter',
                   mode: 'lines+markers',
-                  x: maturityGrid.map((value) => Number(value) * 365),
+                  x: formattedExpiryLabels,
                   y: strikeSeriesMarket,
                   line: { color: '#38bdf8', width: 2 },
                   name: 'Strike Slice Mkt',
@@ -471,7 +498,7 @@ export default function SurfacePage({
                 {
                   type: 'scatter',
                   mode: 'lines+markers',
-                  x: maturityGrid.map((value) => Number(value) * 365),
+                  x: formattedExpiryLabels,
                   y: strikeSeriesModel,
                   line: { color: '#f43f5e', width: 2, shape: 'spline', smoothing: 1.1 },
                   name: 'Strike Slice Mod',
@@ -483,7 +510,7 @@ export default function SurfacePage({
                 paper_bgcolor: '#0a0f19',
                 plot_bgcolor: '#0a0f19',
                 font: { color: '#d1d5db', size: 10 },
-                xaxis: { title: 'Days', gridcolor: '#1f2937' },
+                xaxis: { title: 'Expiry', gridcolor: '#1f2937' },
                 yaxis: { title: 'IV', gridcolor: '#1f2937' },
                 title: { text: 'Strike Slice', font: { size: 10, color: '#9ca3af' }, x: 0.02, xanchor: 'left' },
                 legend: { orientation: 'h', y: 1.2, font: { size: 9 } },
@@ -497,10 +524,54 @@ export default function SurfacePage({
             <div><span>Residual RMSE</span><strong>{formatNumber(residualRmse, 6)}</strong></div>
             <div><span>Selected Strike</span><strong>{formatNumber(selectedStrikeValue, 2)}</strong></div>
             <div><span>Max |Residual|</span><strong>{formatNumber(residualMaxAbs, 6)}</strong></div>
-            <div><span>Selected Expiry (D)</span><strong>{formatNumber((maturityGrid[sliceExpiryIndex] || 0) * 365, 0)}</strong></div>
+            <div><span>Selected Expiry</span><strong>{formattedExpiryLabels[sliceExpiryIndex] || '-'}</strong></div>
           </div>
         </Panel>
       </div>
+
+      {/* Fullscreen overlay for maximized 3D chart */}
+      {maximizedChart && !singleExpiry && ReactDOM.createPortal(
+        <div className="chart-fullscreen-overlay">
+          <div className="fullscreen-header">
+            <span>{maximizedChart === 'hero' ? 'Market + Model Combined Surface 3D' : maximizedChart === 'market' ? 'Market IV Surface 3D' : 'Model IV Surface 3D'}</span>
+            <button className="close-btn" onClick={() => setMaximizedChart(null)} type="button">✕ Close</button>
+          </div>
+          <div className="fullscreen-body">
+            <Plot
+              data={
+                maximizedChart === 'hero'
+                  ? [
+                      { type: 'surface', x: strikeGrid, y: maturityGrid, z: marketMatrix, colorscale: 'Viridis', opacity: 0.92, showscale: false, name: 'Market', text: marketExpiryText, hovertemplate: 'Strike: %{x:.0f}<br>Expiry: %{text}<br>IV: %{z:.4f}<extra>Market</extra>' },
+                      { type: 'surface', x: denseModelSurface.strikeDense, y: denseModelSurface.maturityDense, z: denseModelSurface.matrixDense, colorscale: 'Portland', opacity: 0.72, showscale: true, name: 'Model', hovertemplate: 'Strike: %{x:.0f}<br>IV: %{z:.4f}<extra>Model</extra>' },
+                    ]
+                  : maximizedChart === 'market'
+                  ? [{ type: 'surface', x: strikeGrid, y: maturityGrid, z: marketMatrix, colorscale: 'Viridis', text: marketExpiryText, hovertemplate: 'Strike: %{x:.0f}<br>Expiry: %{text}<br>IV: %{z:.4f}<extra></extra>' }]
+                  : [{
+                      type: 'surface',
+                      x: denseModelSurface.strikeDense,
+                      y: denseModelSurface.maturityDense,
+                      z: denseModelSurface.matrixDense,
+                      colorscale: 'Portland',
+                      showscale: true,
+                      contours: { z: { show: false } },
+                      hovertemplate: 'Strike: %{x:.0f}<br>IV: %{z:.4f}<extra>Model</extra>',
+                    }]
+              }
+              layout={{
+                height: window.innerHeight - 60,
+                margin: { l: 20, r: 20, b: 20, t: 20 },
+                paper_bgcolor: '#0a0f19',
+                font: { color: '#d1d5db', size: 12 },
+                scene: { xaxis: { title: 'Strike' }, yaxis: expiryYAxis, zaxis: { title: 'IV' }, bgcolor: '#0a0f19' },
+              }}
+              config={{ displaylogo: false, responsive: true }}
+              style={{ width: '100%', height: '100%' }}
+              useResizeHandler
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
     </SnapshotGuard>
   );
 }

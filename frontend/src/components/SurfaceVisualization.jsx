@@ -1,6 +1,15 @@
 import React from 'react';
 import Plot from 'react-plotly.js';
 
+const SHORT_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function formatExpiryLabel(label) {
+  const m = String(label).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    return `${parseInt(m[3],10)} ${SHORT_MONTHS[parseInt(m[2],10)-1]} ${m[1].slice(2)}`;
+  }
+  return String(label);
+}
+
 const MODES = [
   { key: 'market', label: 'Market Surface' },
   { key: 'model', label: 'Model Surface' },
@@ -50,6 +59,20 @@ export default function SurfaceVisualization({ mode, onChangeMode, staticResult 
     Array.isArray(modelMatrix) &&
     modelMatrix.length > 0;
   const canRender = hasSurfaceGrid && (isCompareMode ? hasCompareMatrices : hasSingleMatrix);
+
+  const rawExpiryLabels = Array.isArray(surface?.expiry_labels)
+    ? surface.expiry_labels
+    : (Array.isArray(surface?.maturity_grid) ? surface.maturity_grid.map((v) => `${Math.max(1, Math.round(Number(v) * 365))}D`) : []);
+  const formattedExpiryLabels = rawExpiryLabels.map(formatExpiryLabel);
+  const maturityGrid = Array.isArray(surface?.maturity_grid) ? surface.maturity_grid : [];
+  const expiryYAxis = {
+    title: 'Expiry',
+    tickvals: maturityGrid,
+    ticktext: formattedExpiryLabels,
+  };
+  const expiryText2D = maturityGrid.map((_, ri) =>
+    (Array.isArray(surface?.strike_grid) ? surface.strike_grid : []).map(() => formattedExpiryLabels[ri] || ''),
+  );
 
   const referenceMatrix = isCompareMode ? marketMatrix : zMatrix;
   const rowCount = canRender && Array.isArray(referenceMatrix) ? referenceMatrix.length : 0;
@@ -103,8 +126,9 @@ export default function SurfaceVisualization({ mode, onChangeMode, staticResult 
                     y: surface.maturity_grid,
                     z: zMatrix,
                     colorbar: { title: mode === 'residual' ? 'Residual IV' : 'IV' },
+                    text: expiryText2D,
                     hovertemplate:
-                      'Strike: %{x}<br>Maturity: %{y:.4f}y<br>Value: %{z:.6f}<extra></extra>',
+                      'Strike: %{x}<br>Expiry: %{text}<br>Value: %{z:.6f}<extra></extra>',
                   },
                 ]}
                 layout={{
@@ -113,7 +137,7 @@ export default function SurfaceVisualization({ mode, onChangeMode, staticResult 
                   margin: { l: 20, r: 20, b: 20, t: 40 },
                   scene: {
                     xaxis: { title: 'Strike' },
-                    yaxis: { title: 'Maturity (Years)' },
+                    yaxis: expiryYAxis,
                     zaxis: { title: mode === 'residual' ? 'Residual IV' : 'Implied Vol' },
                   },
                 }}
@@ -133,8 +157,9 @@ export default function SurfaceVisualization({ mode, onChangeMode, staticResult 
                     opacity: 0.95,
                     colorscale: 'Viridis',
                     showscale: false,
+                    text: canRender3D ? expiryText2D : undefined,
                     hovertemplate:
-                      'Market<br>Strike: %{x}<br>Maturity: %{y:.4f}y<br>IV: %{z:.6f}<extra></extra>',
+                      'Market<br>Strike: %{x}<br>Expiry: %{text}<br>IV: %{z:.6f}<extra></extra>',
                   },
                   {
                     type: 'surface',
@@ -145,8 +170,9 @@ export default function SurfaceVisualization({ mode, onChangeMode, staticResult 
                     opacity: 0.65,
                     colorscale: 'Portland',
                     colorbar: { title: 'Model IV' },
+                    text: canRender3D ? expiryText2D : undefined,
                     hovertemplate:
-                      'Model<br>Strike: %{x}<br>Maturity: %{y:.4f}y<br>IV: %{z:.6f}<extra></extra>',
+                      'Model<br>Strike: %{x}<br>Expiry: %{text}<br>IV: %{z:.6f}<extra></extra>',
                   },
                 ]}
                 layout={{
@@ -157,7 +183,7 @@ export default function SurfaceVisualization({ mode, onChangeMode, staticResult 
                   margin: { l: 20, r: 20, b: 20, t: 40 },
                   scene: {
                     xaxis: { title: 'Strike' },
-                    yaxis: { title: 'Maturity (Years)' },
+                    yaxis: expiryYAxis,
                     zaxis: { title: 'Implied Vol' },
                   },
                 }}

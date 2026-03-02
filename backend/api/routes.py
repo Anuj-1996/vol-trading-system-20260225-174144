@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
@@ -8,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from ..config import CONFIG
 from ..exceptions import CalibrationError, DataIngestionError, EngineError, SimulationError, StrategyError
 from ..logger import get_logger
-from ..services.engine_service import PipelineRequest, StrategyEngineService
+from ..services.engine_service import LivePipelineRequest, PipelineRequest, StrategyEngineService
 from ..services.job_service import AsyncJobService
 from ..simulation.dynamic_hedge import HedgeMode
 
@@ -30,6 +31,27 @@ class StaticPipelinePayload(BaseModel):
 class DynamicPipelinePayload(StaticPipelinePayload):
     hedge_mode: HedgeMode
     transaction_cost_rate: float = Field(default=0.0005, ge=0.0)
+
+
+class LiveFetchPayload(BaseModel):
+    symbol: str = Field(default="NIFTY", description="Index symbol: NIFTY or BANKNIFTY")
+    expiries: Optional[List[str]] = Field(
+        default=None,
+        description='List of expiry date strings, or null/["all"] for all',
+    )
+
+
+class LiveStaticPipelinePayload(BaseModel):
+    data_id: str = Field(description="Cache key returned by /api/v1/data/fetch-live")
+    db_path: str = "backend/vol_engine.db"
+    risk_free_rate: float = 0.065
+    dividend_yield: float = 0.012
+    capital_limit: float = Field(default=500000.0, gt=0.0)
+    strike_increment: int = Field(default=50, gt=0)
+    max_legs: int = Field(default=4, ge=1, le=6)
+    max_width: float = Field(default=1000.0, gt=0.0)
+    simulation_paths: int = Field(default=30000, ge=1000)
+    simulation_steps: int = Field(default=64, ge=8)
 
 
 router = APIRouter()
@@ -117,3 +139,68 @@ def cancel_job(job_id: str) -> dict:
         "result": status.result,
         "error": status.error,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────
+# NSE Live Data Endpoints
+# ──────────────────────────────────────────────────────────────────────
+
+
+@router.post("/data/fetch-live")
+def fetch_live_nse_data(payload: LiveFetchPayload) -> dict:
+    """Fetch option-chain data from NSE, clean it, and cache for analysis."""
+    _logger.info("START | fetch_live_nse_data | symbol=%s", payload.symbol)
+    try:
+        result = _engine.fetch_nse_live_data(
+            symbol=payload.symbol,
+            expiries=payload.expiries,
+        )
+        _logger.info("END | fetch_live_nse_data | data_id=%s", result["data_id"])
+        return {"status": "ok", "data": result}
+    except DataIngestionError as exc:
+        _logger.exception("ERROR | fetch_live_nse_data")
+        raise HTTPException(status_code=502, detail=f"NSE fetch failed: {exc}") from exc
+    except Exception as exc:
+        _logger.exception("ERROR | fetch_live_nse_data")
+        raise HTTPException(status_code=500, detail=f"Internal error: {exc}") from exc
+
+
+@router.get("/data/expiries")
+def get_nse_expiries(symbol: str = "NIFTY") -> dict:
+    """Return available expiry dates from NSE (fast, metadata-only call)."""
+    _logger.info("START | get_nse_expiries | symbol=%s", symbol)
+    try:
+        expiry_dates = _engine._nse_client.get_expiry_dates(symbol=symbol)
+        return {
+            "status": "ok",
+            "data": {
+                "expiry_dates": expiry_dates,
+                "symbol": symbol,
+            },
+        }
+    except DataIngestionError as exc:
+        _logger.exception("ERROR | get_nse_expiries")
+        raise HTTPException(status_code=502, detail=f"NSE fetch failed: {exc}") from exc
+    except Exception as exc:
+        _logger.exception("ERROR | get_nse_expiries")
+        raise HTTPException(status_code=500, detail=f"Internal error: {exc}") from exc
+
+
+@router.post("/pipeline/live-static")
+def run_live_static_pipeline(payload: LiveStaticPipelinePayload) -> dict:
+    """Run the full static analysis pipeline on cached live NSE data."""
+    _logger.info("START | run_live_static_pipeline | data_id=%s", payload.data_id)
+    try:
+        request = LivePipelineRequest(**payload.model_dump())
+        response = _engine.run_live_pipeline(request=request)
+        _logger.info("END | run_live_static_pipeline")
+        return {"status": "ok", "data": response}
+    except ValueError as exc:
+        _logger.exception("ERROR | run_live_static_pipeline")
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (DataIngestionError, CalibrationError, SimulationError, StrategyError, EngineError) as exc:
+        _logger.exception("ERROR | run_live_static_pipeline")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _logger.exception("ERROR | run_live_static_pipeline")
+        raise HTTPException(status_code=500, detail=f"Internal error: {exc}") from exc

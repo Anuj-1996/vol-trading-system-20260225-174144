@@ -238,10 +238,32 @@ class StrategyEngineService:
         )
         strategies = self._generate_strategies(constraints=constraints, strike_set=strike_set)
 
+        # Build model IV surface BEFORE evaluate so we can price legs with BS
+        near_T = float(np.min(surface.maturity_grid))
+        model_iv_for_pricing = self._build_model_surface_matrix(
+            spot=spot,
+            rate=request.risk_free_rate,
+            dividend_yield=request.dividend_yield,
+            maturity_grid=surface.maturity_grid,
+            strike_grid=surface.strike_grid,
+            params=calibration_result.parameters,
+        )
+        _near_idx = int(np.argmin(surface.maturity_grid))
+        _strike_arr = surface.strike_grid
+        _iv_row = model_iv_for_pricing[_near_idx]
+
+        def iv_lookup(strike: float, option_type: str) -> float:
+            idx = int(np.argmin(np.abs(_strike_arr - strike)))
+            iv = float(_iv_row[idx])
+            return max(iv, 0.01)
+
         metrics, pnl_distributions = self._static_eval.evaluate(
             strategies=strategies,
             terminal_prices=simulation_result.terminal_prices,
             spot=spot,
+            T=near_T,
+            r=request.risk_free_rate,
+            iv_lookup=iv_lookup,
         )
 
         fragility_scores: Dict[str, float] = {}
@@ -258,14 +280,7 @@ class StrategyEngineService:
             regime_weights=regime.ranking_weights,
         )
 
-        model_iv_matrix = self._build_model_surface_matrix(
-            spot=spot,
-            rate=request.risk_free_rate,
-            dividend_yield=request.dividend_yield,
-            maturity_grid=surface.maturity_grid,
-            strike_grid=surface.strike_grid,
-            params=calibration_result.parameters,
-        )
+        model_iv_matrix = model_iv_for_pricing  # reuse – already computed above
         residual_iv_matrix = model_iv_matrix - surface.implied_vol_matrix
         oi_profile = self._build_open_interest_profile(
             filtered_records=filtered,
@@ -274,9 +289,28 @@ class StrategyEngineService:
         )
 
         atm_index = int(np.argmin(np.abs(surface.strike_grid - spot)))
-        near_index = int(np.argmin(surface.maturity_grid))
-        atm_market_iv = float(surface.implied_vol_matrix[near_index, atm_index])
-        atm_model_iv = float(model_iv_matrix[near_index, atm_index])
+        # Pick the nearest maturity that has a non-zero market IV at ATM
+        maturity_order = np.argsort(surface.maturity_grid)
+        atm_market_iv = 0.0
+        chosen_near_index = int(maturity_order[0])
+        for mi in maturity_order:
+            iv_val = float(surface.implied_vol_matrix[int(mi), atm_index])
+            if iv_val > 1e-6:
+                atm_market_iv = iv_val
+                chosen_near_index = int(mi)
+                break
+        atm_model_iv = float(model_iv_matrix[chosen_near_index, atm_index])
+        # Fallback: if still zero, use the model IV
+        if atm_market_iv < 1e-6:
+            atm_market_iv = atm_model_iv
+
+        # Compute skew slope (25-delta put IV minus 25-delta call IV proxy)
+        num_strikes = len(surface.strike_grid)
+        otm_put_idx = max(0, atm_index - max(1, num_strikes // 8))
+        otm_call_idx = min(num_strikes - 1, atm_index + max(1, num_strikes // 8))
+        put_wing_iv = float(surface.implied_vol_matrix[chosen_near_index, otm_put_idx])
+        call_wing_iv = float(surface.implied_vol_matrix[chosen_near_index, otm_call_idx])
+        skew_slope = put_wing_iv - call_wing_iv  # positive = put-skew (normal)
 
         # Use symbol to determine yfinance ticker — pass symbol to _fetch_market_history_metrics
         # which will map it via _map_underlying_to_ticker (checks for NIFTY/BANKNIFTY in string)
@@ -323,14 +357,24 @@ class StrategyEngineService:
                 "iterations": calibration_result.iterations,
                 "converged": calibration_result.converged,
             },
-            "regime": {"label": regime.label, "confidence": regime.confidence},
+            "regime": {
+                "label": regime.label,
+                "confidence": regime.confidence,
+                "volatility_regime_score": round(atm_market_iv / max(rv_reference, 1e-8), 4),
+                "skew_regime_score": round(skew_slope, 6),
+            },
             "top_strategies": [
                 {
                     "strategy_type": item.metrics.strategy_type,
                     "strikes": item.metrics.strikes,
+                    "legs_label": item.metrics.legs_label,
+                    "net_premium": item.metrics.net_premium,
                     "overall_score": item.overall_score,
-                    "cost": strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0),
-                    "margin_required": strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0),
+                    "cost": abs(item.metrics.net_premium),
+                    "margin_required": max(
+                        abs(item.metrics.net_premium),
+                        strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0),
+                    ),
                     "expected_value": item.metrics.expected_value,
                     "var_95": item.metrics.var_95,
                     "var_99": item.metrics.var_99,
@@ -344,7 +388,11 @@ class StrategyEngineService:
                     "vega_exposure": item.metrics.vega_exposure,
                     "theta_exposure": item.metrics.theta_exposure,
                     "skew_exposure": item.metrics.skew_exposure,
-                    "break_even_levels": list(item.metrics.strikes),
+                    "break_even_levels": self._static_eval._compute_break_evens(
+                        simulation_result.terminal_prices,
+                        pnl_distributions.get(f"{item.metrics.strategy_type}:{item.metrics.strikes}", np.array([], dtype=float)),
+                        spot,
+                    ),
                     "pnl_distribution": pnl_distributions.get(
                         f"{item.metrics.strategy_type}:{item.metrics.strikes}",
                         np.array([], dtype=float),
@@ -697,10 +745,36 @@ class StrategyEngineService:
         )
         strategies = self._generate_strategies(constraints=constraints, strike_set=strike_set)
 
+        # Build IV lookup from model surface (nearest maturity for strategy pricing)
+        near_maturity_idx = int(np.argmin(surface.maturity_grid))
+        near_T = max(float(surface.maturity_grid[near_maturity_idx]), 1e-6)
+        model_iv_for_pricing = self._build_model_surface_matrix(
+            spot=request.spot,
+            rate=request.risk_free_rate,
+            dividend_yield=request.dividend_yield,
+            maturity_grid=surface.maturity_grid,
+            strike_grid=surface.strike_grid,
+            params=calibration_result.parameters,
+        )
+        near_iv_row = model_iv_for_pricing[near_maturity_idx, :]
+        strike_grid_list = surface.strike_grid.tolist()
+
+        def iv_lookup(strike: float, option_type: str) -> float:
+            """Interpolate model IV for a given strike from the near-term smile."""
+            idx = int(np.argmin(np.abs(surface.strike_grid - strike)))
+            base_iv = float(near_iv_row[idx])
+            # Put IV typically slightly higher than call (put skew)
+            if option_type == 'P' and strike < request.spot:
+                base_iv *= 1.02  # mild skew adjustment
+            return max(base_iv, 0.01)
+
         metrics, pnl_distributions = self._static_eval.evaluate(
             strategies=strategies,
             terminal_prices=simulation_result.terminal_prices,
             spot=request.spot,
+            T=near_T,
+            r=request.risk_free_rate,
+            iv_lookup=iv_lookup,
         )
 
         fragility_scores: Dict[str, float] = {}
@@ -717,14 +791,7 @@ class StrategyEngineService:
             regime_weights=regime.ranking_weights,
         )
 
-        model_iv_matrix = self._build_model_surface_matrix(
-            spot=request.spot,
-            rate=request.risk_free_rate,
-            dividend_yield=request.dividend_yield,
-            maturity_grid=surface.maturity_grid,
-            strike_grid=surface.strike_grid,
-            params=calibration_result.parameters,
-        )
+        model_iv_matrix = model_iv_for_pricing  # already computed above
         residual_iv_matrix = model_iv_matrix - surface.implied_vol_matrix
         oi_profile = self._build_open_interest_profile(
             filtered_records=filtered,
@@ -746,9 +813,27 @@ class StrategyEngineService:
         )
 
         atm_index = int(np.argmin(np.abs(surface.strike_grid - request.spot)))
-        near_index = int(np.argmin(surface.maturity_grid))
-        atm_market_iv = float(surface.implied_vol_matrix[near_index, atm_index])
-        atm_model_iv = float(model_iv_matrix[near_index, atm_index])
+        # Pick the nearest maturity that has a non-zero market IV at ATM
+        maturity_order = np.argsort(surface.maturity_grid)
+        atm_market_iv = 0.0
+        chosen_near_index = int(maturity_order[0])
+        for mi in maturity_order:
+            iv_val = float(surface.implied_vol_matrix[int(mi), atm_index])
+            if iv_val > 1e-6:
+                atm_market_iv = iv_val
+                chosen_near_index = int(mi)
+                break
+        atm_model_iv = float(model_iv_matrix[chosen_near_index, atm_index])
+        if atm_market_iv < 1e-6:
+            atm_market_iv = atm_model_iv
+
+        num_strikes = len(surface.strike_grid)
+        otm_put_idx = max(0, atm_index - max(1, num_strikes // 8))
+        otm_call_idx = min(num_strikes - 1, atm_index + max(1, num_strikes // 8))
+        put_wing_iv = float(surface.implied_vol_matrix[chosen_near_index, otm_put_idx])
+        call_wing_iv = float(surface.implied_vol_matrix[chosen_near_index, otm_call_idx])
+        skew_slope = put_wing_iv - call_wing_iv
+
         history_metrics = self._fetch_market_history_metrics(request.file_path, atm_market_iv)
         rv_reference = history_metrics["rv_20d"] if history_metrics["rv_20d"] is not None else atm_model_iv
         realized_implied_spread = float(atm_market_iv - rv_reference)
@@ -790,14 +875,21 @@ class StrategyEngineService:
                 "iterations": calibration_result.iterations,
                 "converged": calibration_result.converged,
             },
-            "regime": {"label": regime.label, "confidence": regime.confidence},
+            "regime": {
+                "label": regime.label,
+                "confidence": regime.confidence,
+                "volatility_regime_score": round(atm_market_iv / max(rv_reference, 1e-8), 4),
+                "skew_regime_score": round(skew_slope, 6),
+            },
             "top_strategies": [
                 {
                     "strategy_type": item.metrics.strategy_type,
                     "strikes": item.metrics.strikes,
+                    "legs_label": item.metrics.legs_label,
+                    "net_premium": item.metrics.net_premium,
                     "overall_score": item.overall_score,
-                    "cost": strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0),
-                    "margin_required": strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0),
+                    "cost": abs(item.metrics.net_premium),
+                    "margin_required": max(abs(item.metrics.net_premium), strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0)),
                     "expected_value": item.metrics.expected_value,
                     "var_95": item.metrics.var_95,
                     "var_99": item.metrics.var_99,
@@ -811,7 +903,11 @@ class StrategyEngineService:
                     "vega_exposure": item.metrics.vega_exposure,
                     "theta_exposure": item.metrics.theta_exposure,
                     "skew_exposure": item.metrics.skew_exposure,
-                    "break_even_levels": list(item.metrics.strikes),
+                    "break_even_levels": self._static_eval._compute_break_evens(
+                        simulation_result.terminal_prices,
+                        pnl_distributions.get(f"{item.metrics.strategy_type}:{item.metrics.strikes}", np.array([], dtype=float)),
+                        request.spot,
+                    ),
                     "pnl_distribution": pnl_distributions.get(
                         f"{item.metrics.strategy_type}:{item.metrics.strikes}",
                         np.array([], dtype=float),

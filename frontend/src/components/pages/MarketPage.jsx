@@ -17,7 +17,7 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
   const rv20Series = hasHistory ? history.rv20_annualized : [];
   const rv60Series = hasHistory ? history.rv60_annualized : [];
   const volumeSeries = hasHistory ? history.volume || [] : [];
-  const spotSpreadPct = market?.atm_iv && market?.rv_20d ? ((Number(market.atm_iv) - Number(market.rv_20d)) * 100) : 0;
+  const spotSpreadPct = market?.atm_iv && market?.rv_20d ? ((Number(market.atm_iv) - Number(market.rv_20d)) * 100) : null;
 
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
@@ -110,7 +110,7 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
               <div><span>20D RV</span><strong>{formatNumber(market?.rv_20d, 4)}</strong></div>
               <div><span>60D RV</span><strong>{formatNumber(market?.rv_60d, 4)}</strong></div>
               <div><span>Volume (last)</span><strong>{formatNumber(volumeSeries[volumeSeries.length - 1], 0)}</strong></div>
-              <div><span>ATM IV - 20D RV (pts)</span><strong>{formatNumber(spotSpreadPct, 2)}</strong></div>
+              <div><span>ATM IV - 20D RV (pts)</span><strong>{spotSpreadPct !== null ? formatNumber(spotSpreadPct, 2) : '-'}</strong></div>
             </div>
           </Panel>
         </div>
@@ -196,17 +196,20 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
         <div className="col-right">
           <Panel title="Market Regime Box">
             <div className="kv-grid one-col">
-              <div><span>Trend Regime</span><strong>{market?.regime?.label || '-'}</strong></div>
-              <div><span>Vol Regime</span><strong>{formatNumber(market?.regime?.volatility_regime_score, 4)}</strong></div>
-              <div><span>Skew Regime</span><strong>{formatNumber(market?.regime?.skew_regime_score, 4)}</strong></div>
+              <div><span>Trend Regime</span><strong style={{color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e'}}>{market?.regime?.label || '-'}</strong></div>
+              <div><span>Vol Regime (IV/RV)</span><strong>{market?.regime?.volatility_regime_score != null ? Number(market.regime.volatility_regime_score).toFixed(2) + 'x' : '-'}</strong></div>
+              <div><span>Skew (Put-Call)</span><strong>{market?.regime?.skew_regime_score != null ? (Number(market.regime.skew_regime_score) * 100).toFixed(2) + ' pts' : '-'}</strong></div>
+              <div><span>Confidence</span><strong>{market?.regime?.confidence != null ? (Number(market.regime.confidence) * 100).toFixed(1) + '%' : '-'}</strong></div>
             </div>
           </Panel>
           <Panel title="Vol Stats">
             <div className="kv-grid one-col">
-              <div><span>IV Rank</span><strong>{formatNumber(market?.iv_rank, 2)}</strong></div>
-              <div><span>IV Percentile</span><strong>{formatNumber(market?.iv_percentile, 2)}</strong></div>
-              <div><span>IV-RV Spread</span><strong>{formatNumber(market?.realized_implied_spread, 6)}</strong></div>
-              <div><span>VVIX Equivalent</span><strong>{formatNumber(market?.vvix_equivalent, 4)}</strong></div>
+              <div><span>ATM Market IV</span><strong style={{color:'#f59e0b'}}>{market?.atm_iv != null ? (Number(market.atm_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
+              <div><span>ATM Model IV</span><strong>{market?.atm_model_iv != null ? (Number(market.atm_model_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
+              <div><span>IV Rank</span><strong>{market?.iv_rank != null ? Number(market.iv_rank).toFixed(1) + '%' : '-'}</strong></div>
+              <div><span>IV Percentile</span><strong>{market?.iv_percentile != null ? Number(market.iv_percentile).toFixed(1) + '%' : '-'}</strong></div>
+              <div><span>IV-RV Spread</span><strong style={{color: Number(market?.realized_implied_spread ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{market?.realized_implied_spread != null ? (Number(market.realized_implied_spread) * 100).toFixed(2) + ' pts' : '-'}</strong></div>
+              <div><span>VVIX Equivalent</span><strong>{market?.vvix_equivalent != null ? (Number(market.vvix_equivalent) * 100).toFixed(2) + '%' : '-'}</strong></div>
             </div>
             <Plot
               data={[

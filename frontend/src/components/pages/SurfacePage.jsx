@@ -329,6 +329,41 @@ export default function SurfacePage({
             useResizeHandler
           />
         </Panel>
+        <Panel title="Residual IV Surface 3D" onMaximize={() => setMaximizedChart('residual')}>
+          <Plot
+            data={singleExpiry
+              ? [{ type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: displayResidualMatrix[0] || [], line: { color: '#f43f5e', width: 2 }, name: 'Residual' },
+                 { type: 'scatter', mode: 'lines', x: [strikeGrid[0], strikeGrid[strikeGrid.length - 1]], y: [0, 0], line: { color: '#6b7280', width: 1, dash: 'dash' }, showlegend: false }]
+              : [{
+                  type: 'surface',
+                  x: strikeGrid,
+                  y: maturityGrid,
+                  z: displayResidualMatrix,
+                  colorscale: [[0,'#3b82f6'],[0.5,'#111827'],[1,'#ef4444']],
+                  showscale: true,
+                  colorbar: { title: 'Residual', tickformat: '.4f' },
+                  cmid: 0,
+                  hovertemplate: 'Strike: %{x:.0f}<br>Residual: %{z:.4f}<extra></extra>',
+                }]}
+            layout={{
+              height: 260,
+              margin: { l: 20, r: 20, b: 20, t: 20 },
+              paper_bgcolor: '#0a0f19',
+              font: { color: '#d1d5db', size: 11 },
+              ...(singleExpiry
+                ? {
+                    xaxis: { title: 'Strike', gridcolor: '#1f2937' },
+                    yaxis: { title: 'Residual IV', gridcolor: '#1f2937' },
+                  }
+                : {
+                    scene: { xaxis: { title: 'Strike' }, yaxis: expiryYAxis, zaxis: { title: 'Residual IV' }, bgcolor: '#0a0f19' },
+                  }),
+            }}
+            config={{ displaylogo: false, responsive: true }}
+            style={{ width: '100%' }}
+            useResizeHandler
+          />
+        </Panel>
         <Panel title="Max Pain by Expiry">
           <Plot
             data={[
@@ -426,6 +461,22 @@ export default function SurfacePage({
             <div><span>Market IV Mean</span><strong>{formatNumber(marketIvDistribution.length ? marketIvDistribution.reduce((a, b) => a + b, 0) / marketIvDistribution.length : 0, 6)}</strong></div>
             <div><span>Model IV Mean</span><strong>{formatNumber(modelIvDistribution.length ? modelIvDistribution.reduce((a, b) => a + b, 0) / modelIvDistribution.length : 0, 6)}</strong></div>
           </div>
+        </Panel>
+        <Panel title="Heston Calibration">
+          {surface?.calibration ? (
+            <div className="kv-grid two-col compact">
+              <div><span>Status</span><strong style={{color: surface.calibration.converged ? '#22c55e' : '#f43f5e'}}>{surface.calibration.converged ? 'Converged' : 'Not Converged'}</strong></div>
+              <div><span>Iterations</span><strong>{surface.calibration.iterations ?? '-'}</strong></div>
+              <div><span>Weighted RMSE</span><strong>{formatNumber(surface.calibration.weighted_rmse, 6)}</strong></div>
+              <div><span>v\u2080 (Inst. Var)</span><strong>{formatNumber(surface.calibration.parameters?.v0, 6)}</strong></div>
+              <div><span>\u03B8 (Long Var)</span><strong>{formatNumber(surface.calibration.parameters?.theta, 6)}</strong></div>
+              <div><span>\u03BA (Mean Rev)</span><strong>{formatNumber(surface.calibration.parameters?.kappa, 4)}</strong></div>
+              <div><span>\u03C3 (Vol of Vol)</span><strong>{formatNumber(surface.calibration.parameters?.sigma, 6)}</strong></div>
+              <div><span>\u03C1 (Correlation)</span><strong>{formatNumber(surface.calibration.parameters?.rho, 4)}</strong></div>
+            </div>
+          ) : (
+            <p style={{color:'#6b7280', fontSize:'0.75rem'}}>Run pipeline to see calibration parameters.</p>
+          )}
         </Panel>
         <Panel title="Slice Viewer" className="surface-slice-wide">
           <div className="slice-controls">
@@ -533,7 +584,7 @@ export default function SurfacePage({
       {maximizedChart && !singleExpiry && ReactDOM.createPortal(
         <div className="chart-fullscreen-overlay">
           <div className="fullscreen-header">
-            <span>{maximizedChart === 'hero' ? 'Market + Model Combined Surface 3D' : maximizedChart === 'market' ? 'Market IV Surface 3D' : 'Model IV Surface 3D'}</span>
+            <span>{maximizedChart === 'hero' ? 'Market + Model Combined Surface 3D' : maximizedChart === 'market' ? 'Market IV Surface 3D' : maximizedChart === 'residual' ? 'Residual IV Surface 3D' : 'Model IV Surface 3D'}</span>
             <button className="close-btn" onClick={() => setMaximizedChart(null)} type="button">✕ Close</button>
           </div>
           <div className="fullscreen-body">
@@ -546,6 +597,18 @@ export default function SurfacePage({
                     ]
                   : maximizedChart === 'market'
                   ? [{ type: 'surface', x: strikeGrid, y: maturityGrid, z: marketMatrix, colorscale: 'Viridis', text: marketExpiryText, hovertemplate: 'Strike: %{x:.0f}<br>Expiry: %{text}<br>IV: %{z:.4f}<extra></extra>' }]
+                  : maximizedChart === 'residual'
+                  ? [{
+                      type: 'surface',
+                      x: strikeGrid,
+                      y: maturityGrid,
+                      z: displayResidualMatrix,
+                      colorscale: [[0,'#3b82f6'],[0.5,'#111827'],[1,'#ef4444']],
+                      showscale: true,
+                      colorbar: { title: 'Residual', tickformat: '.4f' },
+                      cmid: 0,
+                      hovertemplate: 'Strike: %{x:.0f}<br>Residual: %{z:.4f}<extra></extra>',
+                    }]
                   : [{
                       type: 'surface',
                       x: denseModelSurface.strikeDense,
@@ -562,7 +625,7 @@ export default function SurfacePage({
                 margin: { l: 20, r: 20, b: 20, t: 20 },
                 paper_bgcolor: '#0a0f19',
                 font: { color: '#d1d5db', size: 12 },
-                scene: { xaxis: { title: 'Strike' }, yaxis: expiryYAxis, zaxis: { title: 'IV' }, bgcolor: '#0a0f19' },
+                scene: { xaxis: { title: 'Strike' }, yaxis: expiryYAxis, zaxis: { title: maximizedChart === 'residual' ? 'Residual IV' : 'IV' }, bgcolor: '#0a0f19' },
               }}
               config={{ displaylogo: false, responsive: true }}
               style={{ width: '100%', height: '100%' }}

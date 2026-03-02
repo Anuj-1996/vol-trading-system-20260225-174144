@@ -21,8 +21,12 @@ function withStrategyIds(items = []) {
   }));
 }
 
-function buildRiskFromStrategy(strategy = {}, dynamicResult = null) {
+function buildRiskFromStrategy(strategy = {}, dynamicResult = null, spot = 0) {
   return {
+    spot: Number(spot),
+    cost: Number(strategy.cost ?? strategy.margin_required ?? 0),
+    strategy_type: strategy.strategy_type || 'unknown',
+    strikes: Array.isArray(strategy.strikes) ? strategy.strikes : [],
     base_pnl: Number(dynamicResult?.mean_pnl ?? strategy.expected_value ?? 0),
     delta: Number(strategy.delta_exposure ?? 0),
     gamma: Number(strategy.gamma_exposure ?? 0),
@@ -31,12 +35,77 @@ function buildRiskFromStrategy(strategy = {}, dynamicResult = null) {
     var_95: Number(strategy.var_95 ?? strategy.var_99 ?? dynamicResult?.var_99 ?? 0),
     var_99: Number(strategy.var_99 ?? dynamicResult?.var_99 ?? 0),
     expected_shortfall: Number(strategy.expected_shortfall ?? dynamicResult?.expected_shortfall ?? 0),
+    pnl_distribution: Array.isArray(strategy.pnl_distribution) ? strategy.pnl_distribution : [],
     stress: {
       spot_down_5: Number(strategy.expected_value ?? 0) - Math.abs(Number(strategy.delta_exposure ?? 0)) * 0.05,
       spot_up_5: Number(strategy.expected_value ?? 0) + Math.abs(Number(strategy.delta_exposure ?? 0)) * 0.05,
       vol_up_10: Number(strategy.expected_value ?? 0) + Math.abs(Number(strategy.vega_exposure ?? 0)) * 0.1,
       vol_crush: Number(strategy.expected_value ?? 0) - Math.abs(Number(strategy.vega_exposure ?? 0)) * 0.12,
       time_decay_1w: Number(strategy.expected_value ?? 0) + Number(strategy.theta_exposure ?? 0) * 7,
+    },
+  };
+}
+
+/**
+ * Synthesize walk-forward backtest from MC PnL distributions.
+ * Samples from the top strategy's PnL distribution to simulate
+ * repeated trading over N periods, building equity/drawdown curves.
+ */
+function buildBacktestFromStrategies(strategyItems, periods = 252) {
+  if (!strategyItems.length) return null;
+
+  const top = strategyItems[0];
+  const dist = Array.isArray(top.pnl_distribution) ? top.pnl_distribution.map(Number).filter(Number.isFinite) : [];
+  if (dist.length < 10) return null;
+
+  // Sample from empirical distribution (bootstrap)
+  const sample = () => dist[Math.floor(Math.random() * dist.length)];
+
+  const pnlSeries = [];
+  for (let i = 0; i < periods; i++) pnlSeries.push(sample());
+
+  const equityCurve = [0];
+  for (let i = 0; i < pnlSeries.length; i++) equityCurve.push(equityCurve[i] + pnlSeries[i]);
+
+  const drawdownCurve = [];
+  let peak = -Infinity;
+  for (const eq of equityCurve) {
+    if (eq > peak) peak = eq;
+    drawdownCurve.push(peak - eq);
+  }
+
+  const wins = pnlSeries.filter((p) => p > 0).length;
+  const mean = pnlSeries.reduce((a, b) => a + b, 0) / pnlSeries.length;
+  const std = Math.sqrt(pnlSeries.reduce((a, p) => a + (p - mean) ** 2, 0) / pnlSeries.length);
+  const downside = pnlSeries.filter((p) => p < 0);
+  const downStd = downside.length > 1
+    ? Math.sqrt(downside.reduce((a, p) => a + p * p, 0) / downside.length)
+    : 1;
+  const sharpe = std > 1e-10 ? (mean / std) * Math.sqrt(252) : 0;
+  const sortino = downStd > 1e-10 ? (mean / downStd) * Math.sqrt(252) : 0;
+  const maxDD = Math.max(...drawdownCurve);
+  const totalReturn = equityCurve[equityCurve.length - 1];
+  const cagr = periods >= 252
+    ? Math.sign(totalReturn) * (Math.pow(Math.abs(1 + totalReturn / Math.max(Math.abs(totalReturn), 1)), 252 / periods) - 1)
+    : totalReturn;
+
+  return {
+    strategy_name: top.strategy_type || 'unknown',
+    periods,
+    equity_curve: equityCurve,
+    drawdown_curve: drawdownCurve,
+    pnl_series: pnlSeries,
+    metrics: {
+      sharpe: Number.isFinite(sharpe) ? sharpe : 0,
+      sortino: Number.isFinite(sortino) ? sortino : 0,
+      max_drawdown: Number.isFinite(maxDD) ? maxDD : 0,
+      win_rate: wins / periods,
+      cagr: Number.isFinite(cagr) ? cagr : 0,
+      total_return: totalReturn,
+      mean_pnl: mean,
+      std_pnl: std,
+      best_day: Math.max(...pnlSeries),
+      worst_day: Math.min(...pnlSeries),
     },
   };
 }
@@ -94,6 +163,7 @@ export function normalizeSnapshotModules(staticPayload = {}, dynamicResult = nul
 
   const surface = {
     ...surfacePayload,
+    calibration: staticPayload.calibration || null,
   };
 
   const strategies = {
@@ -101,7 +171,7 @@ export function normalizeSnapshotModules(staticPayload = {}, dynamicResult = nul
     generated_at: new Date().toISOString(),
   };
 
-  const risk = buildRiskFromStrategy(primaryStrategy, dynamicResult);
+  const risk = buildRiskFromStrategy(primaryStrategy, dynamicResult, spot);
 
   const portfolio = {
     totals: strategyItems.reduce(
@@ -117,7 +187,7 @@ export function normalizeSnapshotModules(staticPayload = {}, dynamicResult = nul
     positions: strategyItems,
   };
 
-  const backtest = staticPayload.backtest || null;
+  const backtest = buildBacktestFromStrategies(strategyItems);
 
   return { market, surface, strategies, risk, backtest, portfolio };
 }
@@ -202,7 +272,7 @@ export async function runDynamicForSnapshot(configPayload, options = {}) {
     const snapshotId = `dynamic-${Date.now()}`;
     const modules = {
       ...baseModules,
-      risk: buildRiskFromStrategy(firstStrategy, finalStatus.result),
+      risk: buildRiskFromStrategy(firstStrategy, finalStatus.result, baseModules.market?.spot ?? 0),
       portfolio: {
         ...(baseModules.portfolio || {}),
         dynamic: finalStatus.result,

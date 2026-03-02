@@ -1,19 +1,82 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
+from scipy.stats import norm as sp_norm
 
 from ..decorators import log_execution_time
 from ..logger import get_logger
-from ..strategy.base_strategy import StrategyObject
+from ..strategy.base_strategy import Leg, StrategyObject
+
+
+# ── Black-Scholes helpers ─────────────────────────────────────────────
+
+def bs_call_price(spot: float, strike: float, T: float, r: float, sigma: float) -> float:
+    """Black-Scholes call price."""
+    sigma = max(sigma, 1e-8)
+    T = max(T, 1e-8)
+    d1 = (np.log(spot / strike) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    return float(spot * sp_norm.cdf(d1) - strike * np.exp(-r * T) * sp_norm.cdf(d2))
+
+
+def bs_put_price(spot: float, strike: float, T: float, r: float, sigma: float) -> float:
+    """Black-Scholes put price via put-call parity."""
+    call = bs_call_price(spot, strike, T, r, sigma)
+    return float(call - spot + strike * np.exp(-r * T))
+
+
+def bs_delta(spot: float, strike: float, T: float, r: float, sigma: float, option_type: str) -> float:
+    sigma = max(sigma, 1e-8)
+    T = max(T, 1e-8)
+    d1 = (np.log(spot / strike) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    if option_type == 'C':
+        return float(sp_norm.cdf(d1))
+    return float(sp_norm.cdf(d1) - 1.0)
+
+
+def bs_gamma(spot: float, strike: float, T: float, r: float, sigma: float) -> float:
+    sigma = max(sigma, 1e-8)
+    T = max(T, 1e-8)
+    d1 = (np.log(spot / strike) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    return float(sp_norm.pdf(d1) / (spot * sigma * np.sqrt(T)))
+
+
+def bs_vega(spot: float, strike: float, T: float, r: float, sigma: float) -> float:
+    sigma = max(sigma, 1e-8)
+    T = max(T, 1e-8)
+    d1 = (np.log(spot / strike) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    return float(spot * sp_norm.pdf(d1) * np.sqrt(T) * 0.01)  # per 1% vol move
+
+
+def bs_theta(spot: float, strike: float, T: float, r: float, sigma: float, option_type: str) -> float:
+    sigma = max(sigma, 1e-8)
+    T = max(T, 1e-8)
+    d1 = (np.log(spot / strike) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    term1 = -(spot * sp_norm.pdf(d1) * sigma) / (2.0 * np.sqrt(T))
+    if option_type == 'C':
+        term2 = -r * strike * np.exp(-r * T) * sp_norm.cdf(d2)
+    else:
+        term2 = r * strike * np.exp(-r * T) * sp_norm.cdf(-d2)
+    return float((term1 + term2) / 365.0)  # per day
+
+
+def price_leg(leg: Leg, spot: float, T: float, r: float, sigma: float) -> float:
+    """Price a single leg (premium that would be paid/received)."""
+    if leg.option_type == 'C':
+        return bs_call_price(spot, leg.strike, T, r, sigma)
+    return bs_put_price(spot, leg.strike, T, r, sigma)
 
 
 @dataclass(frozen=True)
 class StrategyMetrics:
     strategy_type: str
     strikes: tuple[float, ...]
+    legs_label: str          # human-readable legs e.g. "24150P↑ 24200C↑"
+    net_premium: float       # net premium paid (positive = debit, negative = credit)
     expected_value: float
     var_95: float
     var_99: float
@@ -31,56 +94,104 @@ class StrategyMetrics:
     skew_exposure: float
 
 
+IVLookup = Callable[[float, str], float]
+"""iv_lookup(strike, option_type) -> implied vol"""
+
+
 class StaticEvaluationEngine:
     def __init__(self) -> None:
         self._logger = get_logger(self.__class__.__name__)
 
     @staticmethod
-    def _strategy_payoff(terminal_prices: np.ndarray, strategy: StrategyObject) -> np.ndarray:
-        strikes = strategy.strikes
-        terminal = terminal_prices
-
-        if strategy.strategy_type == "Long Call":
-            return np.maximum(terminal - strikes[0], 0.0)
-        if strategy.strategy_type == "Long Put":
-            return np.maximum(strikes[0] - terminal, 0.0)
-
-        center = float(np.mean(strikes))
-        return np.maximum(np.abs(terminal - center) - (max(strikes) - min(strikes)) * 0.25, -strategy.margin)
+    def _compute_break_evens(terminal_prices: np.ndarray, pnl: np.ndarray, spot: float) -> list[float]:
+        """Find break-even prices where PnL crosses zero, estimated from MC samples."""
+        try:
+            order = np.argsort(terminal_prices)
+            sorted_prices = terminal_prices[order]
+            sorted_pnl = pnl[order]
+            crossings = []
+            for i in range(len(sorted_pnl) - 1):
+                if sorted_pnl[i] * sorted_pnl[i + 1] < 0:
+                    p0, p1 = float(sorted_prices[i]), float(sorted_prices[i + 1])
+                    v0, v1 = float(sorted_pnl[i]), float(sorted_pnl[i + 1])
+                    be = p0 + (p1 - p0) * (-v0) / (v1 - v0 + 1e-15)
+                    crossings.append(round(be, 2))
+            if not crossings:
+                return []
+            unique = [crossings[0]]
+            threshold = max(spot * 0.005, 10.0)
+            for c in crossings[1:]:
+                if abs(c - unique[-1]) > threshold:
+                    unique.append(c)
+            return unique[:6]
+        except Exception:
+            return []
 
     @staticmethod
-    def _estimate_greeks(strategy: StrategyObject, spot: float) -> tuple[float, float, float, float, float]:
-        strikes = np.array(strategy.strikes, dtype=float)
-        center = float(np.mean(strikes)) if strikes.size else spot
-        moneyness_gap = abs(center - spot) / max(spot, 1e-8)
-        width = float(np.ptp(strikes)) if strikes.size > 1 else max(spot * 0.02, 1.0)
-        width_scale = max(width / max(spot, 1e-8), 1e-4)
-        style = strategy.strategy_type.lower()
+    def _intrinsic_payoff(terminal_prices: np.ndarray, legs: Tuple[Leg, ...]) -> np.ndarray:
+        """Compute multi-leg intrinsic payoff at expiry (before premium cost)."""
+        payoff = np.zeros_like(terminal_prices, dtype=float)
+        for leg in legs:
+            if leg.option_type == 'C':
+                intrinsic = np.maximum(terminal_prices - leg.strike, 0.0)
+            else:
+                intrinsic = np.maximum(leg.strike - terminal_prices, 0.0)
+            payoff += leg.direction * leg.ratio * intrinsic
+        return payoff
 
-        if "long call" in style:
-            delta = float(np.clip(0.55 - 1.5 * moneyness_gap, 0.05, 0.75))
-            gamma = float(0.02 / (1.0 + 12.0 * moneyness_gap))
-            vega = float(0.10 / (1.0 + 8.0 * moneyness_gap))
-        elif "long put" in style:
-            delta = -float(np.clip(0.55 - 1.5 * moneyness_gap, 0.05, 0.75))
-            gamma = float(0.02 / (1.0 + 12.0 * moneyness_gap))
-            vega = float(0.10 / (1.0 + 8.0 * moneyness_gap))
-        elif "straddle" in style or "strangle" in style:
-            delta = 0.0
-            gamma = float(0.028 / (1.0 + 6.0 * width_scale))
-            vega = float(0.14 / (1.0 + 5.0 * width_scale))
-        elif "condor" in style or "butterfly" in style:
-            delta = 0.0
-            gamma = float(0.018 / (1.0 + 7.0 * width_scale))
-            vega = float(0.08 / (1.0 + 6.0 * width_scale))
-        else:
-            delta = float(np.clip((spot - center) / max(width, 1.0), -0.4, 0.4))
-            gamma = float(0.012 / (1.0 + 8.0 * width_scale))
-            vega = float(0.07 / (1.0 + 6.0 * width_scale))
+    @staticmethod
+    def _compute_net_premium(
+        legs: Tuple[Leg, ...],
+        spot: float,
+        T: float,
+        r: float,
+        iv_lookup: IVLookup,
+    ) -> float:
+        """Compute net premium paid to enter the trade (positive = debit)."""
+        total = 0.0
+        for leg in legs:
+            sigma = iv_lookup(leg.strike, leg.option_type)
+            premium = price_leg(leg, spot, T, r, sigma)
+            # direction: +1 means we buy → we pay premium
+            # direction: -1 means we sell → we receive premium
+            total += leg.direction * leg.ratio * premium
+        return total
 
-        theta = float(-0.35 * vega)
-        skew = float(-0.25 * delta)
-        return delta, gamma, vega, theta, skew
+    @staticmethod
+    def _compute_greeks(
+        legs: Tuple[Leg, ...],
+        spot: float,
+        T: float,
+        r: float,
+        iv_lookup: IVLookup,
+    ) -> Tuple[float, float, float, float, float]:
+        """Compute aggregate Greeks from BS for all legs."""
+        total_delta = 0.0
+        total_gamma = 0.0
+        total_vega = 0.0
+        total_theta = 0.0
+        for leg in legs:
+            sigma = iv_lookup(leg.strike, leg.option_type)
+            d = bs_delta(spot, leg.strike, T, r, sigma, leg.option_type)
+            g = bs_gamma(spot, leg.strike, T, r, sigma)
+            v = bs_vega(spot, leg.strike, T, r, sigma)
+            th = bs_theta(spot, leg.strike, T, r, sigma, leg.option_type)
+            total_delta += leg.direction * leg.ratio * d
+            total_gamma += leg.direction * leg.ratio * g
+            total_vega += leg.direction * leg.ratio * v
+            total_theta += leg.direction * leg.ratio * th
+        skew = -0.25 * total_delta  # simple proxy
+        return total_delta, total_gamma, total_vega, total_theta, skew
+
+    @staticmethod
+    def _legs_label(legs: Tuple[Leg, ...]) -> str:
+        """Human-readable leg description, e.g. '24150P↑ 24200C↑'."""
+        parts = []
+        for leg in legs:
+            arrow = '↑' if leg.direction > 0 else '↓'
+            ratio_str = f'{leg.ratio}×' if leg.ratio > 1 else ''
+            parts.append(f"{ratio_str}{int(leg.strike)}{leg.option_type}{arrow}")
+        return ' '.join(parts)
 
     @log_execution_time
     def evaluate(
@@ -88,13 +199,39 @@ class StaticEvaluationEngine:
         strategies: List[StrategyObject],
         terminal_prices: np.ndarray,
         spot: float,
+        T: float = 0.02,
+        r: float = 0.065,
+        iv_lookup: Optional[IVLookup] = None,
     ) -> Tuple[List[StrategyMetrics], Dict[str, np.ndarray]]:
         self._logger.info("START | evaluate | strategies=%d | sample_size=%d", len(strategies), terminal_prices.size)
+
+        # Default IV lookup: flat 20% vol
+        if iv_lookup is None:
+            iv_lookup = lambda strike, otype: 0.20
+
         results: List[StrategyMetrics] = []
         pnl_distributions: Dict[str, np.ndarray] = {}
 
         for strategy in strategies:
-            pnl = self._strategy_payoff(terminal_prices, strategy) - 0.01 * strategy.margin
+            legs = strategy.legs
+            if not legs:
+                # Skip strategies with no legs defined
+                continue
+
+            # 1. Intrinsic payoff at expiry
+            payoff = self._intrinsic_payoff(terminal_prices, legs)
+
+            # 2. Net premium cost (positive = debit paid)
+            net_premium = self._compute_net_premium(legs, spot, T, r, iv_lookup)
+
+            # 3. PnL = payoff - net_premium
+            # For covered call / protective put, add underlying P&L
+            has_underlying = strategy.strategy_type in ("Covered Call", "Protective Put", "Protective Collar")
+            if has_underlying:
+                pnl = payoff - net_premium + (terminal_prices - spot)
+            else:
+                pnl = payoff - net_premium
+
             expected_value = float(np.mean(pnl))
             var_95_threshold = float(np.percentile(pnl, 5))
             var_99_threshold = float(np.percentile(pnl, 1))
@@ -103,7 +240,10 @@ class StaticEvaluationEngine:
             tail = pnl[pnl <= var_99_threshold]
             expected_shortfall = max(0.0, -float(np.mean(tail))) if tail.size > 0 else var_99
             probability_of_loss = float(np.mean(pnl < 0.0))
-            return_on_margin = expected_value / max(strategy.margin, 1e-8)
+
+            # cost = abs(net_premium) for debit strategies, margin for credit
+            cost = abs(net_premium) if net_premium > 0 else max(strategy.margin, abs(net_premium) + 1.0)
+            return_on_margin = expected_value / max(cost, 1e-8)
 
             centered = pnl - expected_value
             std = float(np.std(centered))
@@ -111,14 +251,16 @@ class StaticEvaluationEngine:
             pnl_kurtosis = float(np.mean((centered / std) ** 4)) if std > 1e-12 else 0.0
             max_loss = max(0.0, -float(np.min(pnl)))
             convexity_exposure = float(np.mean(np.abs(np.gradient(np.gradient(np.sort(pnl))))))
-            delta_exposure, gamma_exposure, vega_exposure, theta_exposure, skew_exposure = self._estimate_greeks(
-                strategy=strategy,
-                spot=spot,
+
+            delta_exposure, gamma_exposure, vega_exposure, theta_exposure, skew_exposure = self._compute_greeks(
+                legs, spot, T, r, iv_lookup,
             )
 
             metrics = StrategyMetrics(
                 strategy_type=strategy.strategy_type,
                 strikes=strategy.strikes,
+                legs_label=self._legs_label(legs),
+                net_premium=net_premium,
                 expected_value=expected_value,
                 var_95=var_95,
                 var_99=var_99,

@@ -14,6 +14,10 @@ export default function StrategyDetailPage({ loading, activeSnapshotId, strategi
     return [];
   }, [selected]);
 
+  const var95 = Number(selected?.var_95 ?? 0);
+  const var99 = Number(selected?.var_99 ?? 0);
+  const breakEvens = Array.isArray(selected?.break_even_levels) ? selected.break_even_levels.map(Number) : [];
+
   const stressRows = [
     { name: 'Spot -5%', value: Number(risk?.stress?.spot_down_5 ?? 0) },
     { name: 'Spot +5%', value: Number(risk?.stress?.spot_up_5 ?? 0) },
@@ -25,16 +29,41 @@ export default function StrategyDetailPage({ loading, activeSnapshotId, strategi
   const payoffAxis = Array.from({ length: 41 }, (_, index) => spot * (0.85 + index * 0.0075));
   const selectedDelta = Number(selected?.delta_exposure ?? 0);
   const selectedGamma = Number(selected?.gamma_exposure ?? 0);
+  const payoffValues = payoffAxis.map((nodeSpot) => {
+    const displacement = (nodeSpot - spot) / Math.max(spot, 1e-8);
+    return Number(selected?.expected_value ?? 0) + selectedDelta * displacement * spot + 0.5 * selectedGamma * displacement * displacement * spot;
+  });
 
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
       <div className="page-detail-grid">
+        <Panel title="Key Metrics">
+          <div className="kv-grid two-col compact">
+            <div><span>Strategy</span><strong>{selected?.strategy_type || '-'}</strong></div>
+            <div><span>Strikes</span><strong>{Array.isArray(selected?.strikes) ? selected.strikes.join(', ') : '-'}</strong></div>
+            <div><span>Cost / Margin</span><strong>{formatNumber(selected?.cost, 2)}</strong></div>
+            <div><span>Expected Value</span><strong style={{color: Number(selected?.expected_value ?? 0) >= 0 ? '#22c55e' : '#f43f5e'}}>{formatNumber(selected?.expected_value, 4)}</strong></div>
+            <div><span>Return on Margin</span><strong>{formatNumber(selected?.return_on_margin, 6)}</strong></div>
+            <div><span>Overall Score</span><strong>{formatNumber(selected?.overall_score, 6)}</strong></div>
+            <div><span>P(Loss)</span><strong style={{color: Number(selected?.probability_of_loss ?? 0) > 0.5 ? '#f43f5e' : '#22c55e'}}>{formatNumber(selected?.probability_of_loss, 4)}</strong></div>
+            <div><span>Max Loss</span><strong style={{color: '#f43f5e'}}>{formatNumber(selected?.max_loss, 2)}</strong></div>
+            <div><span>VaR 95</span><strong>{formatNumber(selected?.var_95, 4)}</strong></div>
+            <div><span>VaR 99</span><strong>{formatNumber(selected?.var_99, 4)}</strong></div>
+            <div><span>Exp. Shortfall</span><strong>{formatNumber(selected?.expected_shortfall, 4)}</strong></div>
+            <div><span>Fragility</span><strong>{formatNumber(selected?.fragility_score, 6)}</strong></div>
+          </div>
+        </Panel>
+
         <Panel title="Payoff At Expiry">
           <Plot
-            data={[{ type: 'scatter', mode: 'lines', x: payoffAxis, y: payoffAxis.map((nodeSpot) => {
-              const displacement = (nodeSpot - spot) / Math.max(spot, 1e-8);
-              return Number(selected?.expected_value ?? 0) + selectedDelta * displacement * spot + 0.5 * selectedGamma * displacement * displacement * spot;
-            }), line: { color: '#38bdf8', width: 2 } }]}
+            data={[
+              { type: 'scatter', mode: 'lines', x: payoffAxis, y: payoffValues, line: { color: '#38bdf8', width: 2 }, name: 'Payoff' },
+              { type: 'scatter', mode: 'lines', x: [payoffAxis[0], payoffAxis[payoffAxis.length-1]], y: [0, 0], line: { color: '#4b5563', width: 1, dash: 'dot' }, showlegend: false },
+              ...breakEvens.filter(be => be > payoffAxis[0] && be < payoffAxis[payoffAxis.length-1]).map((be, i) => ({
+                type: 'scatter', mode: 'lines', x: [be, be], y: [Math.min(...payoffValues), Math.max(...payoffValues)],
+                line: { color: '#f59e0b', width: 1.5, dash: 'dash' }, name: i === 0 ? 'Break-even' : undefined, showlegend: i === 0,
+              })),
+            ]}
             layout={{
               height: 220,
               margin: { l: 32, r: 12, b: 24, t: 18 },
@@ -43,7 +72,8 @@ export default function StrategyDetailPage({ loading, activeSnapshotId, strategi
               font: { color: '#d1d5db', size: 11 },
               xaxis: { title: 'Spot at Expiry', gridcolor: '#1f2937' },
               yaxis: { title: 'PnL', gridcolor: '#1f2937' },
-              showlegend: false,
+              showlegend: true,
+              legend: { orientation: 'h', y: 1.15, font: { size: 9 } },
             }}
             config={{ displaylogo: false, responsive: true }}
             style={{ width: '100%' }}
@@ -53,7 +83,11 @@ export default function StrategyDetailPage({ loading, activeSnapshotId, strategi
 
         <Panel title="PnL Distribution Histogram">
           <Plot
-            data={[{ type: 'histogram', x: pnlDist, marker: { color: '#f59e0b' }, nbinsx: 30 }]}
+            data={[
+              { type: 'histogram', x: pnlDist, marker: { color: '#f59e0b' }, nbinsx: 30, name: 'PnL' },
+              ...(var95 ? [{ type: 'scatter', mode: 'lines', x: [-var95, -var95], y: [0, pnlDist.length * 0.08], line: { color: '#fb923c', width: 2, dash: 'dash' }, name: 'VaR 95' }] : []),
+              ...(var99 ? [{ type: 'scatter', mode: 'lines', x: [-var99, -var99], y: [0, pnlDist.length * 0.08], line: { color: '#f43f5e', width: 2, dash: 'dash' }, name: 'VaR 99' }] : []),
+            ]}
             layout={{
               height: 220,
               margin: { l: 32, r: 12, b: 24, t: 18 },
@@ -62,6 +96,7 @@ export default function StrategyDetailPage({ loading, activeSnapshotId, strategi
               font: { color: '#d1d5db', size: 11 },
               xaxis: { title: 'PnL', gridcolor: '#1f2937' },
               yaxis: { title: 'Count', gridcolor: '#1f2937' },
+              legend: { orientation: 'h', y: 1.15, font: { size: 9 } },
             }}
             config={{ displaylogo: false, responsive: true }}
             style={{ width: '100%' }}

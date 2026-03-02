@@ -15,6 +15,8 @@ export default function StrategyScreenerPage({
   const [deltaRange, setDeltaRange] = useState(5);
   const [vegaRange, setVegaRange] = useState(5);
   const [maxMargin, setMaxMargin] = useState(500000);
+  const [sortCol, setSortCol] = useState('overall_score');
+  const [sortAsc, setSortAsc] = useState(false);
 
   const items = Array.isArray(strategies?.items) ? strategies.items : [];
   const selectedStrategy = items.find((item) => item.id === selectedStrategyId) || items[0] || null;
@@ -51,17 +53,30 @@ export default function StrategyScreenerPage({
   );
 
   const filteredItems = useMemo(
-    () => items.filter((item) => {
-      const typePass = strategyTypeFilter === 'all' || item.strategy_type === strategyTypeFilter;
-      const expiryValue = item.expiry || item.expiry_date || null;
-      const expiryPass = expiryFilter === 'all' || expiryValue === expiryFilter;
-      const deltaPass = Math.abs(Number(item.delta_exposure ?? 0)) <= Number(deltaRange);
-      const vegaPass = Math.abs(Number(item.vega_exposure ?? 0)) <= Number(vegaRange);
-      const marginPass = Number(item.margin_required ?? 0) <= Number(maxMargin);
-      return typePass && expiryPass && deltaPass && vegaPass && marginPass;
-    }),
-    [items, strategyTypeFilter, expiryFilter, deltaRange, vegaRange, maxMargin],
+    () => {
+      const filtered = items.filter((item) => {
+        const typePass = strategyTypeFilter === 'all' || item.strategy_type === strategyTypeFilter;
+        const expiryValue = item.expiry || item.expiry_date || null;
+        const expiryPass = expiryFilter === 'all' || expiryValue === expiryFilter;
+        const deltaPass = Math.abs(Number(item.delta_exposure ?? 0)) <= Number(deltaRange);
+        const vegaPass = Math.abs(Number(item.vega_exposure ?? 0)) <= Number(vegaRange);
+        const marginPass = Number(item.margin_required ?? 0) <= Number(maxMargin);
+        return typePass && expiryPass && deltaPass && vegaPass && marginPass;
+      });
+      const sorted = [...filtered].sort((a, b) => {
+        const av = Number(a[sortCol] ?? 0);
+        const bv = Number(b[sortCol] ?? 0);
+        return sortAsc ? av - bv : bv - av;
+      });
+      return sorted;
+    },
+    [items, strategyTypeFilter, expiryFilter, deltaRange, vegaRange, maxMargin, sortCol, sortAsc],
   );
+
+  const handleSort = (col) => {
+    if (sortCol === col) { setSortAsc(!sortAsc); } else { setSortCol(col); setSortAsc(false); }
+  };
+  const sortIndicator = (col) => sortCol === col ? (sortAsc ? ' \u25b2' : ' \u25bc') : '';
 
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
@@ -85,6 +100,8 @@ export default function StrategyScreenerPage({
               useResizeHandler
             />
             <div className="kv-grid one-col compact">
+              <div><span>Legs</span><strong style={{fontSize:'0.8em'}}>{selectedStrategy?.legs_label || '-'}</strong></div>
+              <div><span>Premium</span><strong style={{color: Number(selectedStrategy?.net_premium ?? 0) < 0 ? '#f43f5e' : '#22c55e'}}>{formatNumber(selectedStrategy?.net_premium, 2)}</strong></div>
               <div><span>Delta</span><strong>{formatNumber(selectedStrategy?.delta_exposure, 4)}</strong></div>
               <div><span>Vega</span><strong>{formatNumber(selectedStrategy?.vega_exposure, 4)}</strong></div>
               <div><span>Gamma</span><strong>{formatNumber(selectedStrategy?.gamma_exposure, 4)}</strong></div>
@@ -151,21 +168,25 @@ export default function StrategyScreenerPage({
 
         <Panel title="Ranking Table" className="screener-main">
           <div className="table-wrap">
-            <table className="dense-table">
+            <table className="dense-table sortable-table">
               <thead>
                 <tr>
                   <th>Strategy Type</th>
-                  <th>Strikes</th>
-                  <th>Cost</th>
-                  <th>Expected Return</th>
-                  <th>VaR 95</th>
-                  <th>VaR 99</th>
-                  <th>Expected Shortfall</th>
-                  <th>Return on Margin</th>
-                  <th>Vega Exposure</th>
-                  <th>Gamma Exposure</th>
-                  <th>Fragility Score</th>
-                  <th>Overall Score</th>
+                  <th>Legs</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('net_premium')}>Premium{sortIndicator('net_premium')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('expected_value')}>EV{sortIndicator('expected_value')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('var_95')}>VaR95{sortIndicator('var_95')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('var_99')}>VaR99{sortIndicator('var_99')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('expected_shortfall')}>ES{sortIndicator('expected_shortfall')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('return_on_margin')}>RoM{sortIndicator('return_on_margin')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('probability_of_loss')}>P(Loss){sortIndicator('probability_of_loss')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('max_loss')}>Max Loss{sortIndicator('max_loss')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('pnl_kurtosis')}>Kurtosis{sortIndicator('pnl_kurtosis')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('theta_exposure')}>Theta{sortIndicator('theta_exposure')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('vega_exposure')}>Vega{sortIndicator('vega_exposure')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('gamma_exposure')}>Gamma{sortIndicator('gamma_exposure')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('fragility_score')}>Fragility{sortIndicator('fragility_score')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('overall_score')}>Score{sortIndicator('overall_score')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -173,13 +194,17 @@ export default function StrategyScreenerPage({
                   filteredItems.map((item) => (
                     <tr key={item.id} className={item.id === selectedStrategy?.id ? 'selected-row' : ''} onClick={() => onSelectStrategy(item.id)}>
                       <td>{item.strategy_type}</td>
-                      <td>{Array.isArray(item.strikes) ? item.strikes.join(', ') : '-'}</td>
-                      <td>{formatNumber(item.cost, 2)}</td>
+                      <td style={{whiteSpace:'nowrap',fontSize:'0.8em'}}>{item.legs_label || (Array.isArray(item.strikes) ? item.strikes.join(', ') : '-')}</td>
+                      <td style={{color: Number(item.net_premium ?? 0) < 0 ? '#f43f5e' : '#22c55e'}}>{formatNumber(item.net_premium ?? item.cost, 2)}</td>
                       <td>{formatNumber(item.expected_value, 4)}</td>
                       <td>{formatNumber(item.var_95, 4)}</td>
                       <td>{formatNumber(item.var_99, 4)}</td>
                       <td>{formatNumber(item.expected_shortfall, 4)}</td>
                       <td>{formatNumber(item.return_on_margin, 6)}</td>
+                      <td style={{color: Number(item.probability_of_loss ?? 0) > 0.5 ? '#f43f5e' : '#22c55e'}}>{formatNumber(item.probability_of_loss, 4)}</td>
+                      <td style={{color: '#f43f5e'}}>{formatNumber(item.max_loss, 2)}</td>
+                      <td>{formatNumber(item.pnl_kurtosis, 2)}</td>
+                      <td>{formatNumber(item.theta_exposure, 4)}</td>
                       <td>{formatNumber(item.vega_exposure, 4)}</td>
                       <td>{formatNumber(item.gamma_exposure, 4)}</td>
                       <td>{formatNumber(item.fragility_score, 6)}</td>
@@ -187,7 +212,7 @@ export default function StrategyScreenerPage({
                     </tr>
                   ))
                 ) : (
-                  <tr><td colSpan={12}>No strategies available for selected filters.</td></tr>
+                  <tr><td colSpan={16}>No strategies available for selected filters.</td></tr>
                 )}
               </tbody>
             </table>

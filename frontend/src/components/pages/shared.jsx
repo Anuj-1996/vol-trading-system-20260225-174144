@@ -28,7 +28,7 @@ export function SnapshotGuard({ loading, activeSnapshotId, children }) {
     return <div className="snapshot-placeholder">Loading snapshot...</div>;
   }
   if (!activeSnapshotId) {
-    return <div className="snapshot-placeholder">Run Static to generate snapshot</div>;
+    return <div className="snapshot-placeholder">Click "Fetch Live &amp; Analyse" to load data from NSE</div>;
   }
   return children;
 }

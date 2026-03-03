@@ -386,23 +386,23 @@ export default function App() {
 
   return (
     <div className={`bbg-shell${aiPanelOpen ? ' ai-open' : ''}`}>
-      <aside className="bbg-sidebar">
-        <div className="brand">VOL TRADING</div>
-        <nav>
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={activePage === item.key ? 'nav-item active' : 'nav-item'}
-              onClick={() => setActivePage(item.key)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-      </aside>
-
       <div className="bbg-main">
+        <header className="top-nav-bar">
+          <div className="brand">VOL TRADING</div>
+          <nav className="nav-strip">
+            {NAV_ITEMS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={activePage === item.key ? 'nav-item active' : 'nav-item'}
+                onClick={() => setActivePage(item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        </header>
+
         <header className="top-status-bar">
           <label>
             Underlying

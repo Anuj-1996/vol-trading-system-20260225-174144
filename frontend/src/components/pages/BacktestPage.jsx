@@ -15,6 +15,8 @@ export default function BacktestPage({ loading, activeSnapshotId, backtest }) {
   const equityCurve = Array.isArray(backtest.equity_curve) ? backtest.equity_curve : [];
   const drawdownCurve = Array.isArray(backtest.drawdown_curve) ? backtest.drawdown_curve : [];
   const pnlSeries = Array.isArray(backtest.pnl_series) ? backtest.pnl_series : [];
+  const holdDays = Number(backtest.hold_days_to_maturity || backtest.periods || 1);
+  const annualizationFactor = Math.sqrt(252 / Math.max(holdDays, 1));
   const m = backtest.metrics || {};
   const xLabels = equityCurve.map((_, i) => i);
 
@@ -30,10 +32,10 @@ export default function BacktestPage({ loading, activeSnapshotId, backtest }) {
       const mean = sum / n;
       const variance = sumSq / n - mean * mean;
       const std = Math.sqrt(Math.max(0, variance));
-      result.push(std > 1e-10 ? (mean / std) * Math.sqrt(252) : 0);
+      result.push(std > 1e-10 ? (mean / std) * annualizationFactor : 0);
     }
     return result;
-  }, [pnlSeries]);
+  }, [pnlSeries, annualizationFactor]);
 
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
@@ -41,9 +43,9 @@ export default function BacktestPage({ loading, activeSnapshotId, backtest }) {
         <Panel title="Backtest Summary" className="backtest-controls">
           <div className="kv-grid two-col" style={{ marginBottom: 8 }}>
             <div><span>Strategy</span><strong style={{ color: '#a5b4fc' }}>{backtest.strategy_name || '-'}</strong></div>
-            <div><span>Periods</span><strong>{backtest.periods || '-'}</strong></div>
+            <div><span>Hold Days (to expiry)</span><strong>{backtest.hold_days_to_maturity || backtest.periods || '-'}</strong></div>
           </div>
-          <p style={{ fontSize: 10, color: '#6b7280', margin: '0 0 4px' }}>Walk-forward simulation: each period samples from the MC PnL distribution of the top-ranked strategy.</p>
+          <p style={{ fontSize: 10, color: '#6b7280', margin: '0 0 4px' }}>Walk-forward simulation: each trade holds till maturity and samples from the selected strategy MC PnL distribution.</p>
         </Panel>
 
         <Panel title="Performance Metrics" className="backtest-metrics">
@@ -61,6 +63,7 @@ export default function BacktestPage({ loading, activeSnapshotId, backtest }) {
               <tr><td>Std PnL</td><td>{formatNumber(m.std_pnl, 2)}</td></tr>
               <tr><td>Best Day</td><td style={{ color: '#22c55e' }}>{formatNumber(m.best_day, 2)}</td></tr>
               <tr><td>Worst Day</td><td style={{ color: '#ef4444' }}>{formatNumber(m.worst_day, 2)}</td></tr>
+              <tr><td>Backtest Overfit Prob.</td><td>{m.pbo != null ? `${(Number(m.pbo) * 100).toFixed(1)}%` : '-'}</td></tr>
             </tbody>
           </table>
         </Panel>

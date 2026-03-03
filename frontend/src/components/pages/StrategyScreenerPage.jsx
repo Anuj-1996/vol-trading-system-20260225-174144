@@ -94,7 +94,7 @@ export default function StrategyScreenerPage({
             <Plot
               data={[{ type: 'scatter', mode: 'lines', x: payoffCurve.x, y: payoffCurve.y, line: { color: '#f59e0b', width: 2 } }]}
               layout={{
-                height: 220,
+                height: 300,
                 margin: { l: 32, r: 12, b: 24, t: 18 },
                 paper_bgcolor: '#0a0f19',
                 plot_bgcolor: '#0a0f19',
@@ -107,19 +107,19 @@ export default function StrategyScreenerPage({
               style={{ width: '100%' }}
               useResizeHandler
             />
-            <div className="kv-grid one-col compact">
-              <div><span>Legs</span><strong style={{fontSize:'0.8em'}}>{selectedStrategy?.legs_label || '-'}</strong></div>
+            <div className="kv-grid two-col compact screener-summary-kv">
+              <div className="full-span"><span>Legs</span><strong style={{fontSize:'0.8em'}}>{selectedStrategy?.legs_label || '-'}</strong></div>
               <div><span>Expiry</span><strong style={{color:'#38bdf8'}}>{selectedStrategy?.expiry_date || '-'}</strong></div>
               <div><span>Premium</span><strong style={{color: Number(selectedStrategy?.net_premium ?? 0) < 0 ? '#f43f5e' : '#22c55e'}}>{formatRs(selectedStrategy?.net_premium)}</strong></div>
               <div><span>Delta</span><strong>{formatNumber(selectedStrategy?.delta_exposure, 4)}</strong></div>
               <div><span>Vega</span><strong>{formatNumber(selectedStrategy?.vega_exposure, 4)}</strong></div>
               <div><span>Gamma</span><strong>{formatNumber(selectedStrategy?.gamma_exposure, 4)}</strong></div>
               <div><span>Margin Required</span><strong>{formatRs(selectedStrategy?.margin_required)}</strong></div>
-              <div><span>Break Even</span><strong>{Array.isArray(selectedStrategy?.break_even_levels) ? selectedStrategy.break_even_levels.join(', ') : '-'}</strong></div>
+              <div className="full-span"><span>Break Even</span><strong>{Array.isArray(selectedStrategy?.break_even_levels) ? selectedStrategy.break_even_levels.join(', ') : '-'}</strong></div>
               <button
                 type="button"
                 className="action-btn accent"
-                style={{ marginTop: 8, width: '100%', fontSize: 13, padding: '8px 0', fontWeight: 700 }}
+                style={{ marginTop: 4, width: '100%', fontSize: 13, padding: '8px 0', fontWeight: 700, gridColumn: '1 / -1' }}
                 disabled={!selectedStrategy || addingToPortfolio === selectedStrategy?.id}
                 onClick={async () => {
                   if (!selectedStrategy) return;
@@ -153,7 +153,7 @@ export default function StrategyScreenerPage({
                 },
               ]}
               layout={{
-                height: 220,
+                height: 300,
                 margin: { l: 32, r: 12, b: 24, t: 8 },
                 paper_bgcolor: '#0a0f19',
                 plot_bgcolor: '#0a0f19',

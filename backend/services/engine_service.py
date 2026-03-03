@@ -348,6 +348,7 @@ class StrategyEngineService:
                 "iv_percentile": history_metrics["iv_percentile"],
                 "vvix_equivalent": history_metrics["vvix_equivalent"],
                 "price_history": history_metrics["price_history"],
+                "vol_model_forecasts": history_metrics["vol_model_forecasts"],
                 "data_source": "nse_live",
                 "nse_timestamp": cached["fetch_result"].timestamp,
             },
@@ -494,6 +495,112 @@ class StrategyEngineService:
             return "^NSEBANK"
         return "^NSEI"
 
+    @staticmethod
+    def _variance_to_annual_vol(sigma2: np.ndarray) -> np.ndarray:
+        safe = np.maximum(sigma2, 1e-12)
+        return np.sqrt(safe * 252.0)
+
+    @staticmethod
+    def _fit_vol_models(log_returns: pd.Series, atm_market_iv: float, rv_20d: Optional[float]) -> Dict[str, Any]:
+        if log_returns is None or log_returns.empty:
+            return {"dates": [], "hv20": [], "rv20": [], "iv_proxy": [], "models": {}}
+
+        eps = log_returns.to_numpy(dtype=float)
+        eps = eps - float(np.nanmean(eps))
+        n = eps.size
+        if n < 30:
+            return {"dates": [], "hv20": [], "rv20": [], "iv_proxy": [], "models": {}}
+
+        target_var = float(np.nanvar(eps, ddof=1))
+        target_var = max(target_var, 1e-8)
+
+        def garch_family_series(alpha: float, beta: float, omega: float, gamma: float = 0.0) -> np.ndarray:
+            sigma2 = np.full(n, target_var, dtype=float)
+            for idx in range(1, n):
+                shock2 = eps[idx - 1] ** 2
+                leverage = gamma * shock2 if eps[idx - 1] < 0 else 0.0
+                sigma2[idx] = max(1e-12, omega + alpha * shock2 + leverage + beta * sigma2[idx - 1])
+            return sigma2
+
+        def egarch_series(alpha: float, beta: float, omega: float, gamma: float = 0.0) -> np.ndarray:
+            log_sigma2 = np.full(n, np.log(target_var), dtype=float)
+            e_abs = np.sqrt(2.0 / np.pi)
+            for idx in range(1, n):
+                prev_sigma = np.sqrt(max(np.exp(log_sigma2[idx - 1]), 1e-12))
+                z_prev = eps[idx - 1] / prev_sigma
+                log_sigma2[idx] = omega + beta * log_sigma2[idx - 1] + alpha * (abs(z_prev) - e_abs) + gamma * z_prev
+            return np.exp(log_sigma2)
+
+        params = {
+            "ARCH": {"alpha": 0.25, "beta": 0.0, "gamma": 0.0},
+            "GARCH": {"alpha": 0.08, "beta": 0.90, "gamma": 0.0},
+            "GARCH_EPOW": {"alpha": 0.12, "beta": 0.92, "gamma": -0.08},  # EGARCH-style proxy
+            "GJR_GARCH": {"alpha": 0.05, "beta": 0.88, "gamma": 0.10},
+        }
+        params["ARCH"]["omega"] = target_var * (1.0 - params["ARCH"]["alpha"])
+        params["GARCH"]["omega"] = target_var * (1.0 - params["GARCH"]["alpha"] - params["GARCH"]["beta"])
+        params["GJR_GARCH"]["omega"] = target_var * (
+            1.0 - params["GJR_GARCH"]["alpha"] - params["GJR_GARCH"]["beta"] - 0.5 * params["GJR_GARCH"]["gamma"]
+        )
+        params["GARCH_EPOW"]["omega"] = (1.0 - params["GARCH_EPOW"]["beta"]) * np.log(target_var)
+        for model_key in params:
+            params[model_key]["omega"] = max(float(params[model_key]["omega"]), 1e-12)
+
+        hv20 = log_returns.rolling(20).std(ddof=1) * np.sqrt(252.0)
+        hv20_np = hv20.to_numpy(dtype=float)
+
+        iv_scale = 1.15
+        if rv_20d is not None and rv_20d > 1e-9:
+            iv_scale = float(np.clip(atm_market_iv / rv_20d, 0.5, 2.5))
+
+        model_series: Dict[str, Dict[str, Any]] = {}
+        horizon = 20
+        for model_name, p in params.items():
+            if model_name == "GARCH_EPOW":
+                sigma2 = egarch_series(alpha=p["alpha"], beta=p["beta"], omega=p["omega"], gamma=p["gamma"])
+            else:
+                sigma2 = garch_family_series(alpha=p["alpha"], beta=p["beta"], omega=p["omega"], gamma=p["gamma"])
+
+            rv_series = StrategyEngineService._variance_to_annual_vol(sigma2)
+            iv_series = rv_series * iv_scale
+            rv_forecast = float(rv_series[-1])
+            iv_forecast = float(iv_series[-1])
+
+            if model_name == "GARCH_EPOW":
+                log_var = np.log(max(sigma2[-1], 1e-12))
+                for _ in range(horizon):
+                    log_var = p["omega"] + p["beta"] * log_var
+                rv_forecast = float(np.sqrt(np.exp(log_var) * 252.0))
+                iv_forecast = float(rv_forecast * iv_scale)
+            else:
+                next_var = sigma2[-1]
+                prev_shock2 = eps[-1] ** 2
+                for step in range(horizon):
+                    shock_input = prev_shock2 if step == 0 else next_var
+                    leverage = p["gamma"] * shock_input if eps[-1] < 0 and model_name == "GJR_GARCH" else 0.0
+                    next_var = max(1e-12, p["omega"] + p["alpha"] * shock_input + leverage + p["beta"] * next_var)
+                rv_forecast = float(np.sqrt(next_var * 252.0))
+                iv_forecast = float(rv_forecast * iv_scale)
+
+            model_series[model_name] = {
+                "rv_series": [float(value) if np.isfinite(value) else None for value in rv_series],
+                "iv_series": [float(value) if np.isfinite(value) else None for value in iv_series],
+                "rv_forecast_20d": rv_forecast,
+                "iv_forecast_20d": iv_forecast,
+            }
+
+        # Alias for UI naming request ("GTR GARCH")
+        if "GJR_GARCH" in model_series:
+            model_series["GTR_GARCH"] = dict(model_series["GJR_GARCH"])
+
+        return {
+            "dates": [idx.strftime("%Y-%m-%d") for idx in log_returns.index],
+            "hv20": [float(value) if np.isfinite(value) else None for value in hv20_np],
+            "rv20": [float(value) if np.isfinite(value) else None for value in hv20_np],
+            "iv_proxy": [],
+            "models": model_series,
+        }
+
     def _fetch_market_history_metrics(self, file_path: str, atm_market_iv: float) -> Dict[str, Any]:
         ticker = self._map_underlying_to_ticker(file_path)
         try:
@@ -519,6 +626,7 @@ class StrategyEngineService:
                 "iv_rank": None,
                 "iv_percentile": None,
                 "vvix_equivalent": None,
+                "vol_model_forecasts": None,
             }
 
         if history is None or history.empty:
@@ -533,6 +641,7 @@ class StrategyEngineService:
                 "iv_rank": None,
                 "iv_percentile": None,
                 "vvix_equivalent": None,
+                "vol_model_forecasts": None,
             }
 
         frame = history.copy()
@@ -553,6 +662,7 @@ class StrategyEngineService:
                     "iv_rank": None,
                     "iv_percentile": None,
                     "vvix_equivalent": None,
+                    "vol_model_forecasts": None,
                 }
 
         close = frame["Close"].astype(float)
@@ -567,6 +677,29 @@ class StrategyEngineService:
         rv_10d = trailing_realized(10)
         rv_20d = trailing_realized(20)
         rv_60d = trailing_realized(60)
+        vol_model_forecasts = self._fit_vol_models(log_returns=log_returns, atm_market_iv=atm_market_iv, rv_20d=rv_20d)
+
+        # Add a proxy IV time-series using India VIX when available.
+        try:
+            vix_history = yf.download(
+                "^INDIAVIX",
+                period="18mo",
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
+            if vix_history is not None and not vix_history.empty:
+                if isinstance(vix_history.columns, pd.MultiIndex):
+                    vix_history.columns = [col[0] for col in vix_history.columns]
+                if "Close" in vix_history.columns:
+                    vix_series = (vix_history["Close"].astype(float) / 100.0).reindex(log_returns.index)
+                    vol_model_forecasts["iv_proxy"] = [
+                        float(value) if np.isfinite(value) else None
+                        for value in vix_series.to_numpy(dtype=float)
+                    ]
+        except Exception:
+            pass
 
         rv20_series = log_returns.rolling(20).std(ddof=1).dropna() * annualizer
         if rv20_series.empty:
@@ -627,6 +760,7 @@ class StrategyEngineService:
             "iv_rank": iv_rank,
             "iv_percentile": iv_percentile,
             "vvix_equivalent": vvix_equivalent,
+            "vol_model_forecasts": vol_model_forecasts,
         }
 
     def _resolve_input_paths(self, file_path: str) -> List[Path]:
@@ -966,6 +1100,7 @@ class StrategyEngineService:
                 "iv_percentile": history_metrics["iv_percentile"],
                 "vvix_equivalent": history_metrics["vvix_equivalent"],
                 "price_history": history_metrics["price_history"],
+                "vol_model_forecasts": history_metrics["vol_model_forecasts"],
             },
             "surface": {
                 "strike_grid": surface.strike_grid.tolist(),
@@ -1229,6 +1364,7 @@ class StrategyEngineService:
                 "iv_rank": history_metrics["iv_rank"],
                 "iv_percentile": history_metrics["iv_percentile"],
                 "vvix_equivalent": history_metrics["vvix_equivalent"],
+                "vol_model_forecasts": history_metrics["vol_model_forecasts"],
                 "data_source": "nse_live",
             },
             "surface": {

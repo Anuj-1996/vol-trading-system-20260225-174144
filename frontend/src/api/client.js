@@ -46,20 +46,140 @@ function buildRiskFromStrategy(strategy = {}, dynamicResult = null, spot = 0) {
   };
 }
 
+function pickRandom(array) {
+  return array[Math.floor(Math.random() * array.length)];
+}
+
+function toFiniteSeries(values = []) {
+  return values.map((value) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  });
+}
+
+function buildFallbackVolForecasts(marketOverview = {}) {
+  const history = marketOverview?.price_history || null;
+  const dates = Array.isArray(history?.dates) ? history.dates : [];
+  if (!dates.length) {
+    return null;
+  }
+
+  const hv20 = toFiniteSeries(history?.rv20_annualized || []);
+  const rv60 = toFiniteSeries(history?.rv60_annualized || []);
+  const atmIv = Number(marketOverview?.atm_market_iv ?? 0);
+  const ivProxy = hv20.map((value) => (value != null ? value * 1.1 : (atmIv > 0 ? atmIv : null)));
+
+  const smooth = (series, alpha = 0.12) => {
+    const result = [];
+    let prev = null;
+    for (const value of series) {
+      if (value == null) {
+        result.push(prev);
+        continue;
+      }
+      prev = prev == null ? value : alpha * value + (1 - alpha) * prev;
+      result.push(prev);
+    }
+    return result;
+  };
+
+  const archRv = hv20.map((value, index) => (value != null ? value : rv60[index]));
+  const garchRv = smooth(archRv, 0.10);
+  const egarchRv = smooth(archRv, 0.16);
+  const gjrRv = smooth(archRv, 0.08);
+  const scale = hv20.length && hv20[hv20.length - 1]
+    ? Math.max(0.7, Math.min(2.0, atmIv > 0 ? atmIv / hv20[hv20.length - 1] : 1.1))
+    : 1.1;
+
+  const withIv = (rvSeries) => ({
+    rv_series: rvSeries,
+    iv_series: rvSeries.map((value) => (value != null ? value * scale : null)),
+    rv_forecast_20d: rvSeries[rvSeries.length - 1] ?? null,
+    iv_forecast_20d: (rvSeries[rvSeries.length - 1] ?? null) != null ? rvSeries[rvSeries.length - 1] * scale : null,
+  });
+
+  return {
+    dates,
+    hv20,
+    rv20: hv20,
+    iv_proxy: ivProxy,
+    models: {
+      ARCH: withIv(archRv),
+      GARCH: withIv(garchRv),
+      GARCH_EPOW: withIv(egarchRv),
+      GTR_GARCH: withIv(gjrRv),
+      GJR_GARCH: withIv(gjrRv),
+    },
+  };
+}
+
+function estimateBacktestOverfitProbability(strategyItems, trials = 180, trainSize = 60, testSize = 60) {
+  const candidates = strategyItems
+    .map((item) => ({
+      name: item.strategy_type || 'unknown',
+      dist: Array.isArray(item.pnl_distribution)
+        ? item.pnl_distribution.map(Number).filter(Number.isFinite)
+        : [],
+    }))
+    .filter((item) => item.dist.length >= Math.max(trainSize, testSize));
+
+  if (candidates.length < 2) {
+    return null;
+  }
+
+  const sharpe = (series) => {
+    if (!series.length) return -Infinity;
+    const mean = series.reduce((a, b) => a + b, 0) / series.length;
+    const variance = series.reduce((a, value) => a + (value - mean) ** 2, 0) / series.length;
+    const std = Math.sqrt(Math.max(variance, 1e-12));
+    return mean / std;
+  };
+
+  let overfitCount = 0;
+  for (let trial = 0; trial < trials; trial += 1) {
+    const scored = candidates.map((item) => {
+      const train = Array.from({ length: trainSize }, () => pickRandom(item.dist));
+      const test = Array.from({ length: testSize }, () => pickRandom(item.dist));
+      return { trainSharpe: sharpe(train), testSharpe: sharpe(test) };
+    });
+
+    let bestIdx = 0;
+    for (let idx = 1; idx < scored.length; idx += 1) {
+      if (scored[idx].trainSharpe > scored[bestIdx].trainSharpe) {
+        bestIdx = idx;
+      }
+    }
+
+    const testScores = scored.map((item) => item.testSharpe).sort((a, b) => a - b);
+    const median = testScores[Math.floor(testScores.length / 2)];
+    if (scored[bestIdx].testSharpe < median) {
+      overfitCount += 1;
+    }
+  }
+
+  return overfitCount / trials;
+}
+
 /**
- * Synthesize walk-forward backtest from MC PnL distributions.
- * Samples from the top strategy's PnL distribution to simulate
- * repeated trading over N periods, building equity/drawdown curves.
+ * Synthesize walk-forward backtest from MC PnL distributions using
+ * hold-to-maturity periods (in days) from the selected strategy.
  */
-function buildBacktestFromStrategies(strategyItems, periods = 252) {
+function buildBacktestFromStrategies(strategyItems) {
   if (!strategyItems.length) return null;
 
   const top = strategyItems[0];
   const dist = Array.isArray(top.pnl_distribution) ? top.pnl_distribution.map(Number).filter(Number.isFinite) : [];
   if (dist.length < 10) return null;
 
+  const maturityT = Number(top.maturity_T ?? 0);
+  const holdDays = Number.isFinite(maturityT) && maturityT > 0
+    ? Math.max(1, Math.round(maturityT * 365))
+    : 20;
+  const periods = holdDays;
+  const annualizationFactor = Math.sqrt(252 / Math.max(holdDays, 1));
+
   // Sample from empirical distribution (bootstrap)
-  const sample = () => dist[Math.floor(Math.random() * dist.length)];
+  const sample = () => pickRandom(dist);
 
   const pnlSeries = [];
   for (let i = 0; i < periods; i++) pnlSeries.push(sample());
@@ -81,17 +201,18 @@ function buildBacktestFromStrategies(strategyItems, periods = 252) {
   const downStd = downside.length > 1
     ? Math.sqrt(downside.reduce((a, p) => a + p * p, 0) / downside.length)
     : 1;
-  const sharpe = std > 1e-10 ? (mean / std) * Math.sqrt(252) : 0;
-  const sortino = downStd > 1e-10 ? (mean / downStd) * Math.sqrt(252) : 0;
+  const sharpe = std > 1e-10 ? (mean / std) * annualizationFactor : 0;
+  const sortino = downStd > 1e-10 ? (mean / downStd) * annualizationFactor : 0;
   const maxDD = Math.max(...drawdownCurve);
   const totalReturn = equityCurve[equityCurve.length - 1];
-  const cagr = periods >= 252
-    ? Math.sign(totalReturn) * (Math.pow(Math.abs(1 + totalReturn / Math.max(Math.abs(totalReturn), 1)), 252 / periods) - 1)
-    : totalReturn;
+  const pbo = estimateBacktestOverfitProbability(strategyItems);
+  const cagr = totalReturn;
 
   return {
     strategy_name: top.strategy_type || 'unknown',
     periods,
+    hold_days_to_maturity: holdDays,
+    maturity_T: maturityT,
     equity_curve: equityCurve,
     drawdown_curve: drawdownCurve,
     pnl_series: pnlSeries,
@@ -106,6 +227,7 @@ function buildBacktestFromStrategies(strategyItems, periods = 252) {
       std_pnl: std,
       best_day: Math.max(...pnlSeries),
       worst_day: Math.min(...pnlSeries),
+      pbo: pbo,
     },
   };
 }
@@ -155,6 +277,9 @@ export function normalizeSnapshotModules(staticPayload = {}, dynamicResult = nul
     iv_percentile: staticPayload.market_overview?.iv_percentile ?? null,
     vvix_equivalent: staticPayload.market_overview?.vvix_equivalent ?? null,
     price_history: staticPayload.market_overview?.price_history ?? null,
+    vol_model_forecasts:
+      staticPayload.market_overview?.vol_model_forecasts ||
+      buildFallbackVolForecasts(staticPayload.market_overview || {}),
     term_structure_days: termDays,
     term_structure_market_atm: termMarketAtm,
     term_structure_model_atm: termModelAtm,

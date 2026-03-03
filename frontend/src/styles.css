@@ -15,41 +15,52 @@ body {
 
 .bbg-shell {
   min-height: 100vh;
-  display: grid;
-  grid-template-columns: 220px 1fr;
+  display: block;
   background: #06080f;
   min-width: 0;
-}
-
-.bbg-sidebar {
-  border-right: 1px solid #1f2937;
-  background: #070b13;
-  padding: 10px;
-  box-shadow: inset -1px 0 0 #111827;
 }
 
 .brand {
   color: #f59e0b;
   font-weight: 700;
   font-size: 0.86rem;
-  margin-bottom: 10px;
+  margin-bottom: 0;
   letter-spacing: 0.06em;
   padding: 6px 8px;
   border: 1px solid #1f2937;
   background: #0b1220;
+  white-space: nowrap;
+}
+
+.top-nav-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #1f2937;
+  background: #070b13;
+  box-shadow: inset 0 -1px 0 #111827;
+}
+
+.nav-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  flex: 1;
 }
 
 .nav-item {
-  width: 100%;
-  text-align: left;
+  flex: 0 0 auto;
+  text-align: center;
   background: #0d1420;
   color: #cbd5e1;
   border: 1px solid #1f2937;
-  padding: 8px;
-  margin-bottom: 6px;
+  padding: 7px 10px;
   font-size: 0.78rem;
   cursor: pointer;
   transition: border-color 0.12s ease, background 0.12s ease;
+  min-width: 120px;
 }
 
 .nav-item.active {
@@ -60,7 +71,7 @@ body {
 
 .bbg-main {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto auto 1fr auto;
   min-height: 100vh;
   min-width: 0;
 }
@@ -261,6 +272,14 @@ textarea {
 }
 .panel-fullscreen-panel .bbg-panel-body {
   height: 100%;
+  overflow: auto;
+}
+.panel-fullscreen-panel .js-plotly-plot,
+.panel-fullscreen-panel .plot-container,
+.panel-fullscreen-panel .svg-container {
+  min-height: 72vh !important;
+  height: 72vh !important;
+  max-height: 72vh !important;
 }
 
 .bbg-panel-body {
@@ -289,8 +308,21 @@ textarea {
 
 .page-market-grid {
   display: grid;
-  grid-template-columns: 30% 40% 30%;
+  grid-template-columns: 28% 44% 28%;
   gap: 8px;
+}
+
+.page-market-split {
+  display: grid;
+  grid-template-columns: minmax(0, 4fr) minmax(280px, 1fr);
+  gap: 8px;
+}
+
+.market-plots-stack,
+.market-panels-stack {
+  display: grid;
+  gap: 8px;
+  align-content: start;
 }
 
 .market-price-wide {
@@ -330,7 +362,27 @@ textarea {
   display: grid;
   grid-template-columns: 1.2fr 0.8fr 0.8fr;
   gap: 8px;
-  align-items: stretch;
+  align-items: start;
+}
+
+.screener-summary-kv {
+  gap: 5px;
+}
+
+.screener-summary-kv div {
+  padding: 5px;
+}
+
+.screener-summary-kv span {
+  font-size: 0.62rem;
+}
+
+.screener-summary-kv strong {
+  font-size: 0.76rem;
+}
+
+.screener-summary-kv .full-span {
+  grid-column: 1 / -1;
 }
 
 .screener-filters-grid {
@@ -451,6 +503,23 @@ textarea {
   margin-bottom: 8px;
 }
 
+.slice-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.68rem;
+  color: #9ca3af;
+}
+
+.slice-controls select {
+  background: #0a0f19;
+  border: 1px solid #374151;
+  color: #d1d5db;
+  padding: 5px 6px;
+  font-size: 0.74rem;
+  width: 100%;
+}
+
 .slice-mini-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -481,6 +550,10 @@ textarea {
 .metric-strip strong {
   color: #f8fafc;
   font-size: 0.78rem;
+}
+
+.market-metrics-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
 }
 
 .checkbox-inline {
@@ -585,7 +658,13 @@ textarea {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
+  .top-nav-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .page-market-grid,
+  .page-market-split,
   .page-surface-grid,
   .page-detail-grid,
   .page-risk-grid,
@@ -609,6 +688,10 @@ textarea {
 
   .filters-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .market-metrics-grid {
+    grid-template-columns: 1fr !important;
   }
 }
 

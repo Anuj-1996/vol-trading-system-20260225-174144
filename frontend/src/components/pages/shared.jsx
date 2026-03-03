@@ -37,6 +37,7 @@ export function Panel({ title, children, className = '', onMaximize, enableCopyP
   const fullscreenRef = React.useRef(null);
   const [hasPlot, setHasPlot] = React.useState(false);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
+  const [fullscreenPlotHeight, setFullscreenPlotHeight] = React.useState(720);
   const [copyState, setCopyState] = React.useState('idle');
 
   React.useEffect(() => {
@@ -54,6 +55,62 @@ export function Panel({ title, children, className = '', onMaximize, enableCopyP
     observer.observe(panelNode, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, [children]);
+
+  React.useEffect(() => {
+    if (!isFullscreen) {
+      return undefined;
+    }
+    const computeHeight = () => {
+      const next = Math.max(520, Math.round(window.innerHeight - 150));
+      setFullscreenPlotHeight(next);
+    };
+    computeHeight();
+    window.addEventListener('resize', computeHeight);
+
+    const timers = [80, 420, 1200].map((delay) =>
+      window.setTimeout(() => {
+        window.dispatchEvent(new Event('resize'));
+      }, delay),
+    );
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      window.removeEventListener('resize', computeHeight);
+    };
+  }, [isFullscreen]);
+
+  const fullscreenChildren = React.useMemo(() => {
+    if (!isFullscreen) {
+      return children;
+    }
+    const patchNode = (node) => {
+      if (!React.isValidElement(node)) {
+        return node;
+      }
+      const props = node.props || {};
+      const isPlotLike = Object.prototype.hasOwnProperty.call(props, 'layout')
+        && Object.prototype.hasOwnProperty.call(props, 'data');
+
+      let nextChildren = props.children;
+      if (nextChildren !== undefined) {
+        nextChildren = React.Children.map(nextChildren, patchNode);
+      }
+
+      if (!isPlotLike) {
+        return React.cloneElement(node, { ...props, children: nextChildren });
+      }
+
+      const nextLayout = { ...(props.layout || {}), height: fullscreenPlotHeight, autosize: true };
+      const nextStyle = { ...(props.style || {}), width: '100%', height: `${fullscreenPlotHeight}px` };
+      return React.cloneElement(node, {
+        ...props,
+        layout: nextLayout,
+        style: nextStyle,
+        useResizeHandler: true,
+        children: nextChildren,
+      });
+    };
+    return React.Children.map(children, patchNode);
+  }, [children, isFullscreen, fullscreenPlotHeight]);
 
   const copyPlotToClipboard = async (preferFullscreen = false) => {
     try {
@@ -125,7 +182,7 @@ export function Panel({ title, children, className = '', onMaximize, enableCopyP
             </div>
           )}
         </header>
-        <div className="bbg-panel-body">{children}</div>
+        <div className="bbg-panel-body">{isFullscreen ? null : children}</div>
       </section>
 
       {isFullscreen &&
@@ -149,7 +206,7 @@ export function Panel({ title, children, className = '', onMaximize, enableCopyP
             </header>
             <div className="panel-fullscreen-body" ref={fullscreenRef}>
               <section className={`bbg-panel panel-fullscreen-panel ${className}`.trim()}>
-                <div className="bbg-panel-body">{children}</div>
+                <div className="bbg-panel-body">{fullscreenChildren}</div>
               </section>
             </div>
           </div>,

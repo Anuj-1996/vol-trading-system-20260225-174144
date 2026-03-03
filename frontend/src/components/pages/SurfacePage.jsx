@@ -178,6 +178,31 @@ function buildFrequencyAxis(length) {
   return Array.from({ length: half + 1 }, (_, index) => index / Math.max(length, 1));
 }
 
+function median(values) {
+  const source = Array.isArray(values)
+    ? values.map((value) => Number(value)).filter(Number.isFinite).sort((a, b) => a - b)
+    : [];
+  if (!source.length) {
+    return 0;
+  }
+  const mid = Math.floor(source.length / 2);
+  return source.length % 2 ? source[mid] : (source[mid - 1] + source[mid]) / 2;
+}
+
+function medianStep(values, scale = 1) {
+  if (!Array.isArray(values) || values.length < 2) {
+    return 0;
+  }
+  const diffs = [];
+  for (let index = 1; index < values.length; index += 1) {
+    const diff = Math.abs(Number(values[index]) - Number(values[index - 1]));
+    if (Number.isFinite(diff) && diff > 0) {
+      diffs.push(diff * scale);
+    }
+  }
+  return median(diffs);
+}
+
 function dftMagnitude1D(values) {
   const source = Array.isArray(values) ? values.map((value) => Number(value)) : [];
   const length = source.length;
@@ -329,7 +354,14 @@ export default function SurfacePage({
   const frequencyDomain = useMemo(() => {
     const rowAxis = downsampleAxis(maturityGrid, 14);
     const colAxis = downsampleAxis(strikeGrid, 28);
-    const matrix = downsampleMatrix2D(smoothedModelMatrix, rowAxis.indexes, colAxis.indexes);
+    const matrixRaw = downsampleMatrix2D(smoothedModelMatrix, rowAxis.indexes, colAxis.indexes);
+    const allValues = matrixRaw.flat().map((value) => Number(value)).filter(Number.isFinite);
+    const meanValue = allValues.length
+      ? allValues.reduce((acc, value) => acc + value, 0) / allValues.length
+      : 0;
+    // Remove DC bias so spectral shape is visible (prevents a giant zero-frequency spike).
+    const matrix = matrixRaw.map((row) => row.map((value) => Number(value) - meanValue));
+
     const spectrum = dftMagnitude2D(matrix);
     const powerSpectrum = spectrum.magnitude.map((row) =>
       row.map((value) => {
@@ -337,16 +369,28 @@ export default function SurfacePage({
         return magnitude * magnitude;
       }),
     );
+    if (powerSpectrum.length && powerSpectrum[0].length) {
+      powerSpectrum[0][0] = 0; // suppress residual DC bin
+    }
+    const powerValues = powerSpectrum.flat().filter((value) => Number.isFinite(value) && value > 0);
+    const sortedPower = [...powerValues].sort((a, b) => a - b);
+    const q99 = sortedPower.length
+      ? sortedPower[Math.max(0, Math.floor(0.99 * (sortedPower.length - 1)))]
+      : 1;
+    const scale = q99 > 1e-12 ? q99 : 1;
+    const powerSpectrumDisplay = powerSpectrum.map((row) =>
+      row.map((value) => Math.log10(1 + Math.max(0, value) / scale)),
+    );
 
     let dominantValue = -Infinity;
     let dominantRowIndex = 0;
     let dominantColIndex = 0;
-    for (let rowIndex = 0; rowIndex < powerSpectrum.length; rowIndex += 1) {
-      for (let colIndex = 0; colIndex < (powerSpectrum[rowIndex] || []).length; colIndex += 1) {
+    for (let rowIndex = 0; rowIndex < powerSpectrumDisplay.length; rowIndex += 1) {
+      for (let colIndex = 0; colIndex < (powerSpectrumDisplay[rowIndex] || []).length; colIndex += 1) {
         if (rowIndex === 0 && colIndex === 0) {
           continue;
         }
-        const value = powerSpectrum[rowIndex][colIndex];
+        const value = powerSpectrumDisplay[rowIndex][colIndex];
         if (value > dominantValue) {
           dominantValue = value;
           dominantRowIndex = rowIndex;
@@ -355,17 +399,39 @@ export default function SurfacePage({
       }
     }
 
-    const expiryRow = smoothedModelMatrix[sliceExpiryIndex] || [];
-    const expirySpectrum = dftMagnitude1D(expiryRow).map((value) => Math.log10(1 + Math.max(0, value)));
+    const expiryRowRaw = (smoothedModelMatrix[sliceExpiryIndex] || []).map((value) => Number(value));
+    const expiryMean = expiryRowRaw.length
+      ? expiryRowRaw.reduce((acc, value) => acc + value, 0) / expiryRowRaw.length
+      : 0;
+    const expiryRow = expiryRowRaw.map((value) => value - expiryMean);
+    const expirySpectrum = dftMagnitude1D(expiryRow).map((value) => {
+      const power = Math.max(0, value * value);
+      return Math.log10(1 + power);
+    });
+    if (expirySpectrum.length) {
+      expirySpectrum[0] = 0;
+    }
     const expiryFrequencyAxis = buildFrequencyAxis(expiryRow.length);
+    const strikeStepPoints = medianStep(colAxis.values, 1);
+    const maturityStepDays = medianStep(rowAxis.values, 365);
+    const dominantStrikeFreq = spectrum.strikeFreq[dominantColIndex] ?? 0;
+    const dominantMaturityFreq = spectrum.maturityFreq[dominantRowIndex] ?? 0;
+    const strikeCycleBins = dominantStrikeFreq > 0 ? 1 / dominantStrikeFreq : 0;
+    const maturityCycleBins = dominantMaturityFreq > 0 ? 1 / dominantMaturityFreq : 0;
+    const dominantStrikeCyclePoints = strikeStepPoints > 0 ? strikeCycleBins * strikeStepPoints : 0;
+    const dominantMaturityCycleDays = maturityStepDays > 0 ? maturityCycleBins * maturityStepDays : 0;
 
     return {
       strikeFreq: spectrum.strikeFreq,
       maturityFreq: spectrum.maturityFreq,
-      dominantMaturityFreq: spectrum.maturityFreq[dominantRowIndex] ?? 0,
-      dominantStrikeFreq: spectrum.strikeFreq[dominantColIndex] ?? 0,
+      dominantMaturityFreq,
+      dominantStrikeFreq,
       dominantPower: Number.isFinite(dominantValue) ? dominantValue : 0,
-      powerSpectrum,
+      dominantStrikeCyclePoints,
+      dominantMaturityCycleDays,
+      strikeStepPoints,
+      maturityStepDays,
+      powerSpectrum: powerSpectrumDisplay,
       expirySpectrum,
       expiryFrequencyAxis,
     };
@@ -619,11 +685,11 @@ export default function SurfacePage({
                     x: frequencyDomain.strikeFreq,
                     y: frequencyDomain.maturityFreq,
                     z: frequencyDomain.powerSpectrum,
-                    colorscale: 'Turbo',
+                    colorscale: 'Portland',
                     showscale: true,
-                    colorbar: { title: 'Power |DFT|^2' },
+                    colorbar: { title: { text: 'Normalized Power (log10(1 + P/P99))' } },
                     hovertemplate:
-                      'Strike Freq: %{x:.3f}<br>Maturity Freq: %{y:.3f}<br>Power: %{z:.6f}<extra></extra>',
+                      'Strike Freq: %{x:.3f} cyc/step<br>Maturity Freq: %{y:.3f} cyc/step<br>Norm. Power: %{z:.6f}<extra></extra>',
                   },
                 ]}
                 layout={{
@@ -632,36 +698,11 @@ export default function SurfacePage({
                   paper_bgcolor: '#0a0f19',
                   font: { color: '#d1d5db', size: 10 },
                   scene: {
-                    xaxis: { title: 'Strike Frequency' },
-                    yaxis: { title: 'Maturity Frequency' },
-                    zaxis: { title: 'Spectral Power' },
+                    xaxis: { title: { text: 'Strike Frequency (cycles per strike step)' } },
+                    yaxis: { title: { text: 'Maturity Frequency (cycles per expiry step)' } },
+                    zaxis: { title: { text: 'Spectral Power (normalized log scale)' } },
                     bgcolor: '#0a0f19',
                   },
-                }}
-                config={{ displaylogo: false, responsive: true }}
-                style={{ width: '100%' }}
-                useResizeHandler
-              />
-              <Plot
-                data={[
-                  {
-                    type: 'heatmap',
-                    x: frequencyDomain.strikeFreq,
-                    y: frequencyDomain.maturityFreq,
-                    z: frequencyDomain.powerSpectrum,
-                    colorscale: 'Turbo',
-                    hovertemplate:
-                      'Strike Freq: %{x:.3f}<br>Maturity Freq: %{y:.3f}<br>Power: %{z:.6f}<extra></extra>',
-                  },
-                ]}
-                layout={{
-                  height: 180,
-                  margin: { l: 34, r: 18, b: 30, t: 12 },
-                  paper_bgcolor: '#0a0f19',
-                  plot_bgcolor: '#0a0f19',
-                  font: { color: '#d1d5db', size: 10 },
-                  xaxis: { title: 'Strike Frequency', gridcolor: '#1f2937' },
-                  yaxis: { title: 'Maturity Frequency', gridcolor: '#1f2937' },
                 }}
                 config={{ displaylogo: false, responsive: true }}
                 style={{ width: '100%' }}
@@ -688,7 +729,7 @@ export default function SurfacePage({
                 plot_bgcolor: '#0a0f19',
                 font: { color: '#d1d5db', size: 10 },
                 xaxis: { title: 'Strike Frequency', gridcolor: '#1f2937' },
-                yaxis: { title: 'Power |DFT|^2', gridcolor: '#1f2937' },
+                yaxis: { title: 'Normalized Log Power', gridcolor: '#1f2937' },
               }}
               config={{ displaylogo: false, responsive: true }}
               style={{ width: '100%' }}
@@ -696,10 +737,17 @@ export default function SurfacePage({
             />
           )}
           <div className="metric-strip">
-            <div><span>Dominant Strike Freq</span><strong>{formatNumber(frequencyDomain.dominantStrikeFreq, 4)}</strong></div>
-            <div><span>Dominant Maturity Freq</span><strong>{formatNumber(frequencyDomain.dominantMaturityFreq, 4)}</strong></div>
+            <div><span>Dominant Strike Freq</span><strong>{`${formatNumber(frequencyDomain.dominantStrikeFreq, 4)} cyc/step`}</strong></div>
+            <div><span>Dominant Maturity Freq</span><strong>{`${formatNumber(frequencyDomain.dominantMaturityFreq, 4)} cyc/step`}</strong></div>
             <div><span>Dominant Spectral Power</span><strong>{formatNumber(frequencyDomain.dominantPower, 6)}</strong></div>
             <div><span>Transform Basis</span><strong>2D DFT (Model IV)</strong></div>
+            <div><span>Dominant Strike Cycle</span><strong>{frequencyDomain.dominantStrikeCyclePoints > 0 ? `${formatNumber(frequencyDomain.dominantStrikeCyclePoints, 1)} pts` : '-'}</strong></div>
+            <div><span>Dominant Maturity Cycle</span><strong>{frequencyDomain.dominantMaturityCycleDays > 0 ? `${formatNumber(frequencyDomain.dominantMaturityCycleDays, 1)} days` : '-'}</strong></div>
+            <div><span>Strike Step (Grid)</span><strong>{frequencyDomain.strikeStepPoints > 0 ? `${formatNumber(frequencyDomain.strikeStepPoints, 1)} pts` : '-'}</strong></div>
+            <div><span>Maturity Step (Grid)</span><strong>{frequencyDomain.maturityStepDays > 0 ? `${formatNumber(frequencyDomain.maturityStepDays, 1)} days` : '-'}</strong></div>
+          </div>
+          <div style={{ marginTop: 6, color: '#94a3b8', fontSize: '0.68rem' }}>
+            Frequency units are cycles per grid step. Cycle metrics convert those frequencies to approximate strike points and days.
           </div>
         </Panel>
         <Panel title="Heston Calibration">
@@ -721,20 +769,32 @@ export default function SurfacePage({
         <Panel title="Slice Viewer" className="surface-slice-wide" enableCopyPlot>
           <div className="slice-controls">
             <label>Select Expiry
-              <input
-                type="range"
-                min={0}
-                max={Math.max(0, maturityGrid.length - 1)}
+              <select
                 value={sliceExpiryIndex}
                 onChange={(event) => {
                   const nextIndex = Number(event.target.value);
                   setSliceExpiryIndex(nextIndex);
                   onExpiryIndexChange?.(nextIndex);
                 }}
-              />
+              >
+                {formattedExpiryLabels.map((expiryLabel, index) => (
+                  <option key={`slice-expiry-${expiryLabels[index] || index}`} value={index}>
+                    {expiryLabel}
+                  </option>
+                ))}
+              </select>
             </label>
             <label>Select Strike
-              <input type="range" min={0} max={Math.max(0, strikeGrid.length - 1)} value={sliceStrikeIndex} onChange={(event) => setSliceStrikeIndex(Number(event.target.value))} />
+              <select
+                value={sliceStrikeIndex}
+                onChange={(event) => setSliceStrikeIndex(Number(event.target.value))}
+              >
+                {strikeGrid.map((strike, index) => (
+                  <option key={`slice-strike-${Number(strike) || index}`} value={index}>
+                    {formatNumber(strike, 2)}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="checkbox-inline">
               <input type="checkbox" checked={logMoneyness} onChange={(event) => setLogMoneyness(event.target.checked)} />

@@ -244,6 +244,8 @@ class StrategyEngineService:
 
         # Build model IV surface BEFORE evaluate so we can price legs with BS
         near_T = float(np.min(surface.maturity_grid))
+        _near_idx = int(np.argmin(surface.maturity_grid))
+        near_expiry_date = surface.expiry_list[_near_idx].isoformat() if _near_idx < len(surface.expiry_list) else None
         model_iv_for_pricing = self._build_model_surface_matrix(
             spot=spot,
             rate=request.risk_free_rate,
@@ -252,7 +254,6 @@ class StrategyEngineService:
             strike_grid=surface.strike_grid,
             params=calibration_result.parameters,
         )
-        _near_idx = int(np.argmin(surface.maturity_grid))
         _strike_arr = surface.strike_grid
         _iv_row = model_iv_for_pricing[_near_idx]
 
@@ -261,6 +262,9 @@ class StrategyEngineService:
             iv = float(_iv_row[idx])
             return max(iv, 0.01)
 
+        market_mid = self._build_market_mid(filtered)
+        market_bid_ask = self._build_market_bid_ask(filtered)
+
         metrics, pnl_distributions = self._static_eval.evaluate(
             strategies=strategies,
             terminal_prices=simulation_result.terminal_prices,
@@ -268,6 +272,8 @@ class StrategyEngineService:
             T=near_T,
             r=request.risk_free_rate,
             iv_lookup=iv_lookup,
+            market_mid=market_mid,
+            market_bid_ask=market_bid_ask,
         )
 
         fragility_scores: Dict[str, float] = {}
@@ -367,51 +373,118 @@ class StrategyEngineService:
                 "volatility_regime_score": round(atm_market_iv / max(rv_reference, 1e-8), 4),
                 "skew_regime_score": round(skew_slope, 6),
             },
-            "top_strategies": [
-                {
-                    "strategy_type": item.metrics.strategy_type,
-                    "strikes": item.metrics.strikes,
-                    "legs_label": item.metrics.legs_label,
-                    "net_premium": item.metrics.net_premium,
-                    "overall_score": item.overall_score,
-                    "cost": abs(item.metrics.net_premium),
-                    "margin_required": max(
-                        abs(item.metrics.net_premium),
-                        strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0),
-                    ),
-                    "expected_value": item.metrics.expected_value,
-                    "var_95": item.metrics.var_95,
-                    "var_99": item.metrics.var_99,
-                    "expected_shortfall": item.metrics.expected_shortfall,
-                    "return_on_margin": item.metrics.return_on_margin,
-                    "probability_of_loss": item.metrics.probability_of_loss,
-                    "pnl_kurtosis": item.metrics.pnl_kurtosis,
-                    "max_loss": item.metrics.max_loss,
-                    "delta_exposure": item.metrics.delta_exposure,
-                    "gamma_exposure": item.metrics.gamma_exposure,
-                    "vega_exposure": item.metrics.vega_exposure,
-                    "theta_exposure": item.metrics.theta_exposure,
-                    "skew_exposure": item.metrics.skew_exposure,
-                    "break_even_levels": self._static_eval._compute_break_evens(
-                        simulation_result.terminal_prices,
-                        pnl_distributions.get(f"{item.metrics.strategy_type}:{item.metrics.strikes}", np.array([], dtype=float)),
-                        spot,
-                    ),
-                    "pnl_distribution": pnl_distributions.get(
-                        f"{item.metrics.strategy_type}:{item.metrics.strikes}",
-                        np.array([], dtype=float),
-                    )[:1200].tolist(),
-                    "fragility_score": item.fragility_score,
-                    "legs": [
-                        {"strike": leg.strike, "option_type": leg.option_type, "direction": leg.direction, "ratio": leg.ratio}
-                        for leg in build_legs(item.metrics.strategy_type, item.metrics.strikes)
-                    ],
-                }
-                for item in ranked
-            ],
+            "top_strategies": self._build_top_strategies(ranked, pnl_distributions, simulation_result.terminal_prices, spot, near_expiry_date, near_T, strategy_margin_lookup, market_mid, market_bid_ask),
         }
         self._logger.info("END | run_live_pipeline")
         return response
+
+    @staticmethod
+    def _build_market_mid(filtered: List) -> Dict[tuple, float]:
+        """Build market mid-price lookup: (strike, 'C'|'P') -> mid price in points."""
+        _side_map = {"CALL": "C", "PUT": "P"}
+        market_mid: Dict[tuple, float] = {}
+        for rec in filtered:
+            otype = _side_map.get(rec.side, rec.side)
+            key = (rec.strike, otype)
+            if rec.mid and rec.mid > 0:
+                market_mid[key] = rec.mid
+        return market_mid
+
+    @staticmethod
+    def _build_market_bid_ask(filtered: List) -> Dict[tuple, tuple]:
+        """Build market bid/ask lookup: (strike, 'C'|'P') -> (bid, ask) in points."""
+        _side_map = {"CALL": "C", "PUT": "P"}
+        market_ba: Dict[tuple, tuple] = {}
+        for rec in filtered:
+            otype = _side_map.get(rec.side, rec.side)
+            key = (rec.strike, otype)
+            bid = getattr(rec, 'bid', 0.0) or 0.0
+            ask = getattr(rec, 'ask', 0.0) or 0.0
+            if bid > 0 or ask > 0:
+                market_ba[key] = (bid, ask)
+        return market_ba
+
+    def _build_top_strategies(
+        self,
+        ranked: List,
+        pnl_distributions: Dict[str, np.ndarray],
+        terminal_prices: np.ndarray,
+        spot: float,
+        near_expiry_date: Optional[str],
+        near_T: float,
+        strategy_margin_lookup: Dict,
+        market_mid: Dict[tuple, float],
+        market_bid_ask: Optional[Dict[tuple, tuple]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Build the top_strategies response list with market mid-prices for each leg."""
+        result = []
+        for item in ranked:
+            legs_list = []
+            max_spread_pct = 0.0
+            any_missing_ba = False
+            for leg in build_legs(item.metrics.strategy_type, item.metrics.strikes):
+                mkt_price = market_mid.get((leg.strike, leg.option_type))
+                ba = (market_bid_ask or {}).get((leg.strike, leg.option_type))
+                leg_bid = ba[0] if ba else None
+                leg_ask = ba[1] if ba else None
+                if ba and ba[0] > 0 and ba[1] > 0:
+                    mid_val = (ba[0] + ba[1]) / 2.0
+                    spread_pct = (ba[1] - ba[0]) / mid_val if mid_val > 0 else 0.0
+                    max_spread_pct = max(max_spread_pct, spread_pct)
+                else:
+                    any_missing_ba = True
+                legs_list.append({
+                    "strike": leg.strike,
+                    "option_type": leg.option_type,
+                    "direction": leg.direction,
+                    "ratio": leg.ratio,
+                    "price": round(mkt_price, 2) if mkt_price else None,
+                    "bid": round(leg_bid, 2) if leg_bid else None,
+                    "ask": round(leg_ask, 2) if leg_ask else None,
+                })
+            # Liquidity warning: spread > 5% or missing bid/ask data
+            liquidity_warning = any_missing_ba or max_spread_pct > 0.05
+            result.append({
+                "strategy_type": item.metrics.strategy_type,
+                "strikes": item.metrics.strikes,
+                "legs_label": item.metrics.legs_label,
+                "net_premium": item.metrics.net_premium,
+                "overall_score": item.overall_score,
+                "cost": abs(item.metrics.net_premium),
+                "margin_required": max(
+                    abs(item.metrics.net_premium),
+                    strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0),
+                ),
+                "expected_value": item.metrics.expected_value,
+                "var_95": item.metrics.var_95,
+                "var_99": item.metrics.var_99,
+                "expected_shortfall": item.metrics.expected_shortfall,
+                "return_on_margin": item.metrics.return_on_margin,
+                "probability_of_loss": item.metrics.probability_of_loss,
+                "pnl_kurtosis": item.metrics.pnl_kurtosis,
+                "max_loss": item.metrics.max_loss,
+                "delta_exposure": item.metrics.delta_exposure,
+                "gamma_exposure": item.metrics.gamma_exposure,
+                "vega_exposure": item.metrics.vega_exposure,
+                "theta_exposure": item.metrics.theta_exposure,
+                "skew_exposure": item.metrics.skew_exposure,
+                "expiry_date": near_expiry_date,
+                "maturity_T": near_T,
+                "break_even_levels": self._static_eval._compute_break_evens(
+                    terminal_prices,
+                    pnl_distributions.get(f"{item.metrics.strategy_type}:{item.metrics.strikes}", np.array([], dtype=float)),
+                    spot,
+                ),
+                "pnl_distribution": pnl_distributions.get(
+                    f"{item.metrics.strategy_type}:{item.metrics.strikes}",
+                    np.array([], dtype=float),
+                )[:1200].tolist(),
+                "fragility_score": item.fragility_score,
+                "legs": legs_list,
+                "liquidity_warning": liquidity_warning,
+                "bid_ask_spread_pct": round(max_spread_pct * 100, 2),
+            })
+        return result
 
     def _map_underlying_to_ticker(self, file_path: str) -> str:
         file_upper = Path(file_path).name.upper()
@@ -777,6 +850,7 @@ class StrategyEngineService:
         # Build IV lookup from model surface (nearest maturity for strategy pricing)
         near_maturity_idx = int(np.argmin(surface.maturity_grid))
         near_T = max(float(surface.maturity_grid[near_maturity_idx]), 1e-6)
+        near_expiry_date = surface.expiry_list[near_maturity_idx].isoformat() if near_maturity_idx < len(surface.expiry_list) else None
         model_iv_for_pricing = self._build_model_surface_matrix(
             spot=request.spot,
             rate=request.risk_free_rate,
@@ -797,6 +871,9 @@ class StrategyEngineService:
                 base_iv *= 1.02  # mild skew adjustment
             return max(base_iv, 0.01)
 
+        market_mid = self._build_market_mid(filtered)
+        market_bid_ask = self._build_market_bid_ask(filtered)
+
         metrics, pnl_distributions = self._static_eval.evaluate(
             strategies=strategies,
             terminal_prices=simulation_result.terminal_prices,
@@ -804,6 +881,8 @@ class StrategyEngineService:
             T=near_T,
             r=request.risk_free_rate,
             iv_lookup=iv_lookup,
+            market_mid=market_mid,
+            market_bid_ask=market_bid_ask,
         )
 
         fragility_scores: Dict[str, float] = {}
@@ -910,45 +989,7 @@ class StrategyEngineService:
                 "volatility_regime_score": round(atm_market_iv / max(rv_reference, 1e-8), 4),
                 "skew_regime_score": round(skew_slope, 6),
             },
-            "top_strategies": [
-                {
-                    "strategy_type": item.metrics.strategy_type,
-                    "strikes": item.metrics.strikes,
-                    "legs_label": item.metrics.legs_label,
-                    "net_premium": item.metrics.net_premium,
-                    "overall_score": item.overall_score,
-                    "cost": abs(item.metrics.net_premium),
-                    "margin_required": max(abs(item.metrics.net_premium), strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0)),
-                    "expected_value": item.metrics.expected_value,
-                    "var_95": item.metrics.var_95,
-                    "var_99": item.metrics.var_99,
-                    "expected_shortfall": item.metrics.expected_shortfall,
-                    "return_on_margin": item.metrics.return_on_margin,
-                    "probability_of_loss": item.metrics.probability_of_loss,
-                    "pnl_kurtosis": item.metrics.pnl_kurtosis,
-                    "max_loss": item.metrics.max_loss,
-                    "delta_exposure": item.metrics.delta_exposure,
-                    "gamma_exposure": item.metrics.gamma_exposure,
-                    "vega_exposure": item.metrics.vega_exposure,
-                    "theta_exposure": item.metrics.theta_exposure,
-                    "skew_exposure": item.metrics.skew_exposure,
-                    "break_even_levels": self._static_eval._compute_break_evens(
-                        simulation_result.terminal_prices,
-                        pnl_distributions.get(f"{item.metrics.strategy_type}:{item.metrics.strikes}", np.array([], dtype=float)),
-                        request.spot,
-                    ),
-                    "pnl_distribution": pnl_distributions.get(
-                        f"{item.metrics.strategy_type}:{item.metrics.strikes}",
-                        np.array([], dtype=float),
-                    )[:1200].tolist(),
-                    "fragility_score": item.fragility_score,
-                    "legs": [
-                        {"strike": leg.strike, "option_type": leg.option_type, "direction": leg.direction, "ratio": leg.ratio}
-                        for leg in build_legs(item.metrics.strategy_type, item.metrics.strikes)
-                    ],
-                }
-                for item in ranked
-            ],
+            "top_strategies": self._build_top_strategies(ranked, pnl_distributions, simulation_result.terminal_prices, request.spot, near_expiry_date, near_T, strategy_margin_lookup, market_mid, market_bid_ask),
         }
         self._logger.info("END | run_static_pipeline")
         return response
@@ -1089,6 +1130,8 @@ class StrategyEngineService:
         strategies = self._generate_strategies(constraints=constraints, strike_set=strike_set)
 
         near_T = float(np.min(surface.maturity_grid))
+        _near_idx = int(np.argmin(surface.maturity_grid))
+        near_expiry_date = surface.expiry_list[_near_idx].isoformat() if _near_idx < len(surface.expiry_list) else None
         model_iv_for_pricing = self._build_model_surface_matrix(
             spot=spot,
             rate=risk_free_rate,
@@ -1097,13 +1140,15 @@ class StrategyEngineService:
             strike_grid=surface.strike_grid,
             params=calibration_result.parameters,
         )
-        _near_idx = int(np.argmin(surface.maturity_grid))
         _strike_arr = surface.strike_grid
         _iv_row = model_iv_for_pricing[_near_idx]
 
         def iv_lookup(strike: float, option_type: str) -> float:
             idx = int(np.argmin(np.abs(_strike_arr - strike)))
             return max(float(_iv_row[idx]), 0.01)
+
+        market_mid = self._build_market_mid(filtered)
+        market_bid_ask = self._build_market_bid_ask(filtered)
 
         metrics, pnl_distributions = self._static_eval.evaluate(
             strategies=strategies,
@@ -1112,6 +1157,8 @@ class StrategyEngineService:
             T=near_T,
             r=risk_free_rate,
             iv_lookup=iv_lookup,
+            market_mid=market_mid,
+            market_bid_ask=market_bid_ask,
         )
 
         fragility_scores: Dict[str, float] = {}
@@ -1206,48 +1253,7 @@ class StrategyEngineService:
                 "volatility_regime_score": round(atm_market_iv / max(rv_reference, 1e-8), 4),
                 "skew_regime_score": round(skew_slope, 6),
             },
-            "top_strategies": [
-                {
-                    "strategy_type": item.metrics.strategy_type,
-                    "strikes": item.metrics.strikes,
-                    "legs_label": item.metrics.legs_label,
-                    "net_premium": item.metrics.net_premium,
-                    "overall_score": item.overall_score,
-                    "cost": abs(item.metrics.net_premium),
-                    "margin_required": max(
-                        abs(item.metrics.net_premium),
-                        strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0),
-                    ),
-                    "expected_value": item.metrics.expected_value,
-                    "var_95": item.metrics.var_95,
-                    "var_99": item.metrics.var_99,
-                    "expected_shortfall": item.metrics.expected_shortfall,
-                    "return_on_margin": item.metrics.return_on_margin,
-                    "probability_of_loss": item.metrics.probability_of_loss,
-                    "pnl_kurtosis": item.metrics.pnl_kurtosis,
-                    "max_loss": item.metrics.max_loss,
-                    "delta_exposure": item.metrics.delta_exposure,
-                    "gamma_exposure": item.metrics.gamma_exposure,
-                    "vega_exposure": item.metrics.vega_exposure,
-                    "theta_exposure": item.metrics.theta_exposure,
-                    "skew_exposure": item.metrics.skew_exposure,
-                    "break_even_levels": self._static_eval._compute_break_evens(
-                        simulation_result.terminal_prices,
-                        pnl_distributions.get(f"{item.metrics.strategy_type}:{item.metrics.strikes}", np.array([], dtype=float)),
-                        spot,
-                    ),
-                    "pnl_distribution": pnl_distributions.get(
-                        f"{item.metrics.strategy_type}:{item.metrics.strikes}",
-                        np.array([], dtype=float),
-                    )[:1200].tolist(),
-                    "fragility_score": item.fragility_score,
-                    "legs": [
-                        {"strike": leg.strike, "option_type": leg.option_type, "direction": leg.direction, "ratio": leg.ratio}
-                        for leg in build_legs(item.metrics.strategy_type, item.metrics.strikes)
-                    ],
-                }
-                for item in ranked
-            ],
+            "top_strategies": self._build_top_strategies(ranked, pnl_distributions, simulation_result.terminal_prices, spot, near_expiry_date, near_T, strategy_margin_lookup, market_mid, market_bid_ask),
         }
         self._logger.info("END | recalibrate | rmse=%.6f | converged=%s", calibration_result.metrics.weighted_rmse, calibration_result.converged)
         return response

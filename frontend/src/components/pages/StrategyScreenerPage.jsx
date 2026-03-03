@@ -1,6 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
-import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
+import { portfolioAdd } from '../../api/client';
+import { Panel, SnapshotGuard, formatNumber, formatRs, formatPctVal, NIFTY_LOT_SIZE } from './shared.jsx';
+
+const ADD_BTN_STYLE = {
+  background: '#065f46', border: 'none', color: '#34d399', cursor: 'pointer',
+  padding: '3px 10px', borderRadius: 4, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+};
 
 export default function StrategyScreenerPage({
   loading,
@@ -9,12 +15,14 @@ export default function StrategyScreenerPage({
   selectedStrategyId,
   onSelectStrategy,
   market,
+  onPortfolioAdd,
 }) {
   const [strategyTypeFilter, setStrategyTypeFilter] = useState('all');
   const [expiryFilter, setExpiryFilter] = useState('all');
-  const [deltaRange, setDeltaRange] = useState(5);
-  const [vegaRange, setVegaRange] = useState(5);
-  const [maxMargin, setMaxMargin] = useState(500000);
+  const [deltaRange, setDeltaRange] = useState(100);
+  const [addingToPortfolio, setAddingToPortfolio] = useState(null); // null or strategy id
+  const [vegaRange, setVegaRange] = useState(100);
+  const [maxMargin, setMaxMargin] = useState(5000000);
   const [sortCol, setSortCol] = useState('overall_score');
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -101,12 +109,35 @@ export default function StrategyScreenerPage({
             />
             <div className="kv-grid one-col compact">
               <div><span>Legs</span><strong style={{fontSize:'0.8em'}}>{selectedStrategy?.legs_label || '-'}</strong></div>
-              <div><span>Premium</span><strong style={{color: Number(selectedStrategy?.net_premium ?? 0) < 0 ? '#f43f5e' : '#22c55e'}}>{formatNumber(selectedStrategy?.net_premium, 2)}</strong></div>
+              <div><span>Expiry</span><strong style={{color:'#38bdf8'}}>{selectedStrategy?.expiry_date || '-'}</strong></div>
+              <div><span>Premium</span><strong style={{color: Number(selectedStrategy?.net_premium ?? 0) < 0 ? '#f43f5e' : '#22c55e'}}>{formatRs(selectedStrategy?.net_premium)}</strong></div>
               <div><span>Delta</span><strong>{formatNumber(selectedStrategy?.delta_exposure, 4)}</strong></div>
               <div><span>Vega</span><strong>{formatNumber(selectedStrategy?.vega_exposure, 4)}</strong></div>
               <div><span>Gamma</span><strong>{formatNumber(selectedStrategy?.gamma_exposure, 4)}</strong></div>
-              <div><span>Margin Required</span><strong>{formatNumber(selectedStrategy?.margin_required, 2)}</strong></div>
+              <div><span>Margin Required</span><strong>{formatRs(selectedStrategy?.margin_required)}</strong></div>
               <div><span>Break Even</span><strong>{Array.isArray(selectedStrategy?.break_even_levels) ? selectedStrategy.break_even_levels.join(', ') : '-'}</strong></div>
+              <button
+                type="button"
+                className="action-btn accent"
+                style={{ marginTop: 8, width: '100%', fontSize: 13, padding: '8px 0', fontWeight: 700 }}
+                disabled={!selectedStrategy || addingToPortfolio === selectedStrategy?.id}
+                onClick={async () => {
+                  if (!selectedStrategy) return;
+                  setAddingToPortfolio(selectedStrategy.id);
+                  try {
+                    await portfolioAdd(selectedStrategy, spot);
+                    onPortfolioAdd?.();
+                    alert('Added to Portfolio: ' + selectedStrategy.strategy_type + ' ' + (selectedStrategy.legs_label || ''));
+                  } catch (err) {
+                    console.error('Failed to add to portfolio:', err);
+                    alert('Failed: ' + (err.message || err));
+                  } finally {
+                    setAddingToPortfolio(null);
+                  }
+                }}
+              >
+                {addingToPortfolio === selectedStrategy?.id ? 'Adding...' : '+ ADD TO PORTFOLIO'}
+              </button>
             </div>
             <Plot
               data={[
@@ -173,6 +204,7 @@ export default function StrategyScreenerPage({
                 <tr>
                   <th>Strategy Type</th>
                   <th>Legs</th>
+                  <th>Expiry</th>
                   <th style={{cursor:'pointer'}} onClick={() => handleSort('net_premium')}>Premium{sortIndicator('net_premium')}</th>
                   <th style={{cursor:'pointer'}} onClick={() => handleSort('expected_value')}>EV{sortIndicator('expected_value')}</th>
                   <th style={{cursor:'pointer'}} onClick={() => handleSort('var_95')}>VaR95{sortIndicator('var_95')}</th>
@@ -186,7 +218,11 @@ export default function StrategyScreenerPage({
                   <th style={{cursor:'pointer'}} onClick={() => handleSort('vega_exposure')}>Vega{sortIndicator('vega_exposure')}</th>
                   <th style={{cursor:'pointer'}} onClick={() => handleSort('gamma_exposure')}>Gamma{sortIndicator('gamma_exposure')}</th>
                   <th style={{cursor:'pointer'}} onClick={() => handleSort('fragility_score')}>Fragility{sortIndicator('fragility_score')}</th>
-                  <th style={{cursor:'pointer'}} onClick={() => handleSort('overall_score')}>Score{sortIndicator('overall_score')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('overall_score')}>Score (%){sortIndicator('overall_score')}</th>
+                  <th style={{cursor:'pointer'}} onClick={() => handleSort('bid_ask_spread_pct')}>Spread %{sortIndicator('bid_ask_spread_pct')}</th>
+                  <th>Call</th>
+                  <th>Put</th>
+                  <th style={{width: 70}}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -195,24 +231,61 @@ export default function StrategyScreenerPage({
                     <tr key={item.id} className={item.id === selectedStrategy?.id ? 'selected-row' : ''} onClick={() => onSelectStrategy(item.id)}>
                       <td>{item.strategy_type}</td>
                       <td style={{whiteSpace:'nowrap',fontSize:'0.8em'}}>{item.legs_label || (Array.isArray(item.strikes) ? item.strikes.join(', ') : '-')}</td>
-                      <td style={{color: Number(item.net_premium ?? 0) < 0 ? '#f43f5e' : '#22c55e'}}>{formatNumber(item.net_premium ?? item.cost, 2)}</td>
+                      <td style={{whiteSpace:'nowrap',fontSize:'0.8em',color:'#38bdf8'}}>{item.expiry_date || '-'}</td>
+                      <td style={{color: Number(item.net_premium ?? 0) < 0 ? '#f43f5e' : '#22c55e'}}>{formatRs(item.net_premium ?? item.cost)}</td>
                       <td>{formatNumber(item.expected_value, 4)}</td>
-                      <td>{formatNumber(item.var_95, 4)}</td>
-                      <td>{formatNumber(item.var_99, 4)}</td>
-                      <td>{formatNumber(item.expected_shortfall, 4)}</td>
+                      <td>{formatRs(item.var_95)}</td>
+                      <td>{formatRs(item.var_99)}</td>
+                      <td>{formatRs(item.expected_shortfall)}</td>
                       <td>{formatNumber(item.return_on_margin, 6)}</td>
-                      <td style={{color: Number(item.probability_of_loss ?? 0) > 0.5 ? '#f43f5e' : '#22c55e'}}>{formatNumber(item.probability_of_loss, 4)}</td>
-                      <td style={{color: '#f43f5e'}}>{formatNumber(item.max_loss, 2)}</td>
+                      <td style={{color: Number(item.probability_of_loss ?? 0) > 0.5 ? '#f43f5e' : '#22c55e'}}>{formatPctVal(item.probability_of_loss)}</td>
+                      <td style={{color: '#f43f5e'}}>{formatRs(item.max_loss)}</td>
                       <td>{formatNumber(item.pnl_kurtosis, 2)}</td>
                       <td>{formatNumber(item.theta_exposure, 4)}</td>
                       <td>{formatNumber(item.vega_exposure, 4)}</td>
                       <td>{formatNumber(item.gamma_exposure, 4)}</td>
                       <td>{formatNumber(item.fragility_score, 6)}</td>
-                      <td>{formatNumber(item.overall_score, 6)}</td>
+                      <td>{formatPctVal(item.overall_score)}</td>
+                      <td style={{color: item.liquidity_warning ? '#f59e0b' : '#22c55e', fontWeight: item.liquidity_warning ? 700 : 400}}>
+                        {item.bid_ask_spread_pct != null ? item.bid_ask_spread_pct.toFixed(1) + '%' : '-'}
+                        {item.liquidity_warning ? ' ⚠' : ''}
+                      </td>
+                      <td style={{fontSize:'0.75em',whiteSpace:'nowrap'}}>
+                        {Array.isArray(item.legs) && item.legs.length
+                          ? item.legs.filter(l => l.option_type === 'C').map(l => `${Math.round(l.strike)}${l.option_type}${l.direction > 0 ? '↑' : '↓'}: ${l.price != null ? formatRs(l.price) : '-'}`).join(' · ') || '-'
+                          : '-'}
+                      </td>
+                      <td style={{fontSize:'0.75em',whiteSpace:'nowrap'}}>
+                        {Array.isArray(item.legs) && item.legs.length
+                          ? item.legs.filter(l => l.option_type === 'P').map(l => `${Math.round(l.strike)}${l.option_type}${l.direction > 0 ? '↑' : '↓'}: ${l.price != null ? formatRs(l.price) : '-'}`).join(' · ') || '-'
+                          : '-'}
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          style={ADD_BTN_STYLE}
+                          disabled={addingToPortfolio === item.id}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            setAddingToPortfolio(item.id);
+                            try {
+                              await portfolioAdd(item, spot);
+                              onPortfolioAdd?.();
+                            } catch (err) {
+                              console.error('Add failed:', err);
+                              alert('Failed: ' + (err.message || err));
+                            } finally {
+                              setAddingToPortfolio(null);
+                            }
+                          }}
+                        >
+                          {addingToPortfolio === item.id ? '...' : '+ Add'}
+                        </button>
+                      </td>
                     </tr>
                   ))
                 ) : (
-                  <tr><td colSpan={16}>No strategies available for selected filters.</td></tr>
+                  <tr><td colSpan={20}>No strategies available for selected filters.</td></tr>
                 )}
               </tbody>
             </table>

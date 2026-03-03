@@ -23,68 +23,47 @@ class StrategyAdvisorAgent(BaseAgent):
 
     @property
     def system_prompt(self) -> str:
-        return """You are the Strategy Advisor Agent for an institutional-grade NIFTY options volatility trading system.
-
-ROLE: Senior options strategist responsible for translating quantitative rankings into actionable trade recommendations.
-
-CAPABILITIES:
-- Interpret strategy ranking scores (EV, VaR, ES, RoM, fragility)
-- Explain strategy payoff mechanics (Iron Condor, Butterfly, Bull/Bear Spreads, etc.)
-- Match strategy characteristics to current regime (low-vol favors premium selling, high-vol favors long gamma)
-- Assess Greek exposures (delta, gamma, vega, theta) for portfolio fit
-- Identify hedging overlays when primary strategy has tail risk
-- Compare risk/reward tradeoffs across top candidates
-- Assess break-even levels relative to expected move
-
-STRATEGY KNOWLEDGE:
-- Iron Condor: Short vol, range-bound, benefits from time decay, limited by tail risk
-- Butterfly: Pinning bet, low cost, high gamma near expiry
-- Bull/Bear Spreads: Directional with defined risk
-- Straddle/Strangle: Long gamma, benefits from realized > implied
-- Calendar/Diagonal: Term structure plays, positive theta with vega exposure
-- Ratio Backspread: Cheap tail protection with unlimited upside
-
-OUTPUT FORMAT:
-Structure your analysis as:
-
-**TOP RECOMMENDATION**: [Strategy type + strikes + key rationale in 1 line]
-**WHY THIS WORKS NOW**: [2-3 sentences linking strategy to current regime/vol/skew]
-**RISK PROFILE**: [Max loss, probability of loss, key Greek exposures]
-**ALTERNATIVES**: [2nd and 3rd choices with brief comparison]
-**POSITION SIZING**: [Suggested allocation as % of capital, margin utilization]
-**WATCH FOR**: [Conditions that would invalidate this trade]
-
-RULES:
-- Always ground recommendations in the quantitative data provided.
-- Quote specific numbers: exact strikes, EV, VaR, RoM percentages.
-- If the top strategy has fragility > 0.7, explicitly warn about fragility risk.
-- If probability_of_loss > 60%, flag it as a high-risk speculative position.
-- Never recommend strategies without explaining the regime fit.
-- Use concise, institutional-grade language."""
+        return """You are a NIFTY options strategy advisor.
+Analyze ranked strategies and recommend the best trade for current conditions.
+Strategies: Iron Condor (range-bound), Butterfly (pinning), Bull/Bear Spreads (directional), Straddle/Strangle (long gamma), Calendar (term structure), Ratio Backspread (tail protection).
+Low-vol regime favors premium selling. High-vol favors long gamma. Match strategy to regime.
+Output: TOP RECOMMENDATION (type+strikes+rationale), WHY THIS WORKS NOW, RISK PROFILE (max loss, P(loss), Greeks), ALTERNATIVES, WATCH FOR (invalidation conditions).
+Quote exact numbers from the data. Be concise."""
 
     def build_context_prompt(self, context: AgentContext) -> str:
         sections = ["--- STRATEGY DATA FOR ANALYSIS ---"]
 
         if context.regime:
-            sections.append(f"CURRENT REGIME:\n{self._format_dict(context.regime)}")
+            sections.append(f"CURRENT REGIME: {context.regime.get('label', 'unknown')} (confidence: {context.regime.get('confidence', 'N/A')})")
 
         if context.market_overview:
-            market_compact = {
-                k: context.market_overview.get(k)
-                for k in [
-                    "spot", "atm_market_iv", "atm_model_iv",
-                    "realized_implied_spread", "rv_20d", "iv_rank",
-                    "iv_percentile", "rv_percentile",
-                ]
-                if context.market_overview.get(k) is not None
-            }
-            sections.append(f"MARKET CONTEXT:\n{self._format_dict(market_compact)}")
-
-        if context.calibration:
-            sections.append(f"CALIBRATION QUALITY:\n{self._format_dict(context.calibration)}")
+            spot = context.market_overview.get('spot', 'N/A')
+            iv = context.market_overview.get('atm_market_iv', 'N/A')
+            rv = context.market_overview.get('rv_20d', 'N/A')
+            iv_rank = context.market_overview.get('iv_rank', 'N/A')
+            spread = context.market_overview.get('realized_implied_spread', 'N/A')
+            sections.append(
+                f"MARKET: NIFTY spot={spot}, ATM IV={iv}, RV20d={rv}, "
+                f"IV Rank={iv_rank}, IV-RV spread={spread}"
+            )
 
         if context.top_strategies:
-            sections.append(f"RANKED STRATEGIES (top {min(10, len(context.top_strategies))}):")
-            sections.append(self._format_strategies(context.top_strategies, top_n=10))
+            sections.append(f"TOP {min(5, len(context.top_strategies))} RANKED STRATEGIES:")
+            for i, s in enumerate(context.top_strategies[:5]):
+                sections.append(
+                    f"{i+1}. {s.get('strategy_type','?')} | "
+                    f"legs={s.get('legs_label','?')} | "
+                    f"score={s.get('overall_score','?')} | "
+                    f"EV={s.get('expected_value','?')} | "
+                    f"P(Loss)={s.get('probability_of_loss','?')} | "
+                    f"MaxLoss={s.get('max_loss','?')} | "
+                    f"RoM={s.get('return_on_margin','?')} | "
+                    f"VaR99={s.get('var_99','?')} | "
+                    f"delta={s.get('delta_exposure','?')} | "
+                    f"vega={s.get('vega_exposure','?')} | "
+                    f"theta={s.get('theta_exposure','?')} | "
+                    f"fragility={s.get('fragility_score','?')} | "
+                    f"liquidity_warning={s.get('liquidity_warning', False)}"
+                )
 
-        return "\n\n".join(sections)
+        return "\n".join(sections)

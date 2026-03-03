@@ -302,7 +302,7 @@ export default function AICopilotPanel({ pipelineData, isOpen, onToggle, dataId,
       <div className="ai-copilot-header">
         <div className="ai-header-left">
           <span className="ai-header-title">AI COPILOT</span>
-          <span className="ai-header-model">Gemini 2.5 Flash</span>
+          <span className="ai-header-model">Gemma 2B · Ollama</span>
         </div>
         <div className="ai-header-right">
           <select
@@ -356,7 +356,7 @@ export default function AICopilotPanel({ pipelineData, isOpen, onToggle, dataId,
           <div className="ai-empty-state">
             <div className="ai-empty-title">Multi-Agent AI System</div>
             <div className="ai-empty-desc">
-              7 specialist agents powered by Gemini 2.5 Flash.
+              7 specialist agents powered by Gemma 2B via Ollama (local).
               Ask anything about the market, strategies, risk, calibration, vol surface, or execution.
             </div>
             <div className="ai-agent-grid">

@@ -477,3 +477,36 @@ export async function aiRecalibrate(dataId, initialGuess = null, paramBounds = n
     body: JSON.stringify(body),
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Portfolio Management
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function portfolioAdd(strategy, spot) {
+  return request('/portfolio/add', {
+    method: 'POST',
+    body: JSON.stringify({ strategy, spot }),
+  });
+}
+
+export async function portfolioList(status = 'open') {
+  return request(`/portfolio/positions?status=${encodeURIComponent(status)}`);
+}
+
+export async function portfolioGet(posId) {
+  return request(`/portfolio/positions/${encodeURIComponent(posId)}`);
+}
+
+export async function portfolioDelete(posId) {
+  return request(`/portfolio/positions/${encodeURIComponent(posId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function portfolioClear() {
+  return request('/portfolio/clear', { method: 'DELETE' });
+}
+
+export async function portfolioRevalue() {
+  return request('/portfolio/revalue', { method: 'POST' });
+}

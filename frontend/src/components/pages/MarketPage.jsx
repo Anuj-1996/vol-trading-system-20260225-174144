@@ -1,6 +1,6 @@
 import React from 'react';
 import Plot from 'react-plotly.js';
-import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
+import { Panel, SnapshotGuard, formatNumber, formatPct } from './shared.jsx';
 
 export default function MarketPage({ loading, activeSnapshotId, market, surface, selectedExpiryIndex = 0 }) {
   const strikeGrid = Array.isArray(surface?.strike_grid) ? surface.strike_grid : [];
@@ -107,8 +107,8 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
               useResizeHandler
             />
             <div className="kv-grid two-col compact">
-              <div><span>20D RV</span><strong>{formatNumber(market?.rv_20d, 4)}</strong></div>
-              <div><span>60D RV</span><strong>{formatNumber(market?.rv_60d, 4)}</strong></div>
+              <div><span>20D RV</span><strong>{formatPct(market?.rv_20d, 2)}</strong></div>
+              <div><span>60D RV</span><strong>{formatPct(market?.rv_60d, 2)}</strong></div>
               <div><span>Volume (last)</span><strong>{formatNumber(volumeSeries[volumeSeries.length - 1], 0)}</strong></div>
               <div><span>ATM IV - 20D RV (pts)</span><strong>{spotSpreadPct !== null ? formatNumber(spotSpreadPct, 2) : '-'}</strong></div>
             </div>
@@ -118,10 +118,10 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
         <div className="col-left">
           <Panel title="Realized Vol Metrics">
             <div className="kv-grid two-col">
-              <div><span>10D RV</span><strong>{formatNumber(market?.rv_10d, 4)}</strong></div>
-              <div><span>20D RV</span><strong>{formatNumber(market?.rv_20d, 4)}</strong></div>
-              <div><span>60D RV</span><strong>{formatNumber(market?.rv_60d, 4)}</strong></div>
-              <div><span>RV Percentile</span><strong>{formatNumber(market?.rv_percentile, 2)}</strong></div>
+              <div><span>10D RV</span><strong>{formatPct(market?.rv_10d, 2)}</strong></div>
+              <div><span>20D RV</span><strong>{formatPct(market?.rv_20d, 2)}</strong></div>
+              <div><span>60D RV</span><strong>{formatPct(market?.rv_60d, 2)}</strong></div>
+              <div><span>RV Percentile</span><strong>{formatNumber(market?.rv_percentile, 2)}%</strong></div>
             </div>
           </Panel>
         </div>

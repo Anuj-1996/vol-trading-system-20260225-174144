@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, List, Optional
-
-import numpy as np
-
 from .agent_base import AgentContext, BaseAgent
 from .gemini_client import GeminiClient
 
@@ -28,74 +23,38 @@ class RiskAnalystAgent(BaseAgent):
 
     @property
     def system_prompt(self) -> str:
-        return """You are the Risk Analyst Agent for an institutional-grade NIFTY options volatility trading system.
-
-ROLE: Head of risk at a volatility trading desk. Your job is to find what can go wrong and quantify it.
-
-CAPABILITIES:
-- Interpret VaR (95/99), Expected Shortfall, and max loss at strategy and portfolio level
-- Analyze PnL distribution shape (skewness, kurtosis, fat tails)
-- Assess fragility scores and model sensitivity
-- Evaluate Greek portfolio exposures (net delta, gamma, vega, theta)
-- Run mental stress scenarios: spot +/-5%, vol +/-30%, time decay, gap risk
-- Identify concentration risk across strategies (correlated payoffs)
-- Assess margin utilization and capital efficiency
-- Flag regime-dependent risk (strategies that blow up in regime transitions)
-
-OUTPUT FORMAT:
-Structure your analysis as:
-
-**RISK VERDICT**: [GREEN/YELLOW/RED] - [One-line summary]
-**TAIL RISK ASSESSMENT**: [VaR, ES, max loss analysis with context]
-**GREEK EXPOSURES**: [Net portfolio Greeks and what they mean for P&L sensitivity]
-**STRESS SCENARIOS**:
-  - Spot crash -5%: [Impact estimate]
-  - Vol spike +30%: [Impact estimate]
-  - Vol crush -20%: [Impact estimate]
-  - Time decay 7 days: [Impact estimate]
-**CONCENTRATION RISK**: [Are top strategies correlated? Directional bias?]
-**FRAGILITY WARNING**: [Any strategies with fragility > 0.6?]
-**CAPITAL AT RISK**: [Total margin deployed vs capital limit, utilization %]
-
-RULES:
-- Always compute approximate stress scenario P&L from the Greek data.
-- Use delta * spot_move + 0.5 * gamma * spot_move^2 for spot shocks.
-- Use vega * vol_change for vol shocks.
-- If VaR99 exceeds 50% of margin, flag as high-risk.
-- If Expected Shortfall is more than 2x VaR99, flag fat tail risk.
-- Quote ALL numbers precisely from the data.
-- If kurtosis > 4, explicitly warn about tail risk beyond normal distribution assumptions.
-- Use concise, institutional-grade language. Be direct about dangers."""
+        return """You are a NIFTY options risk analyst.
+Assess: VaR95/99, Expected Shortfall, max loss, Greek exposures (delta/gamma/vega/theta), fragility, concentration risk.
+Approximate stress: dP = delta*dS + 0.5*gamma*dS^2 + vega*dIV + theta*dT.
+Output: RISK VERDICT (GREEN/YELLOW/RED), TAIL RISK, GREEK EXPOSURES, STRESS SCENARIOS (spot +/-5%, vol +/-30%), FRAGILITY WARNING.
+Be quantitative. Quote numbers from the data."""
 
     def build_context_prompt(self, context: AgentContext) -> str:
-        sections = ["--- RISK DATA FOR ANALYSIS ---"]
-
-        if context.market_overview:
-            sections.append(f"SPOT: {context.market_overview.get('spot', 'N/A')}")
-
-        if context.risk_data:
-            sections.append(f"RISK METRICS:\n{self._format_dict(context.risk_data)}")
-
+        lines = []
+        mo = context.market_overview or {}
+        if "spot" in mo:
+            lines.append(f"spot={mo['spot']}")
         if context.top_strategies:
-            # Build portfolio-level aggregations
             strategies = context.top_strategies[:10]
-            portfolio_greeks = {
-                "total_delta": sum(s.get("delta_exposure", 0) for s in strategies),
-                "total_gamma": sum(s.get("gamma_exposure", 0) for s in strategies),
-                "total_vega": sum(s.get("vega_exposure", 0) for s in strategies),
-                "total_theta": sum(s.get("theta_exposure", 0) for s in strategies),
-                "total_margin": sum(s.get("margin_required", 0) for s in strategies),
-                "total_ev": sum(s.get("expected_value", 0) for s in strategies),
-                "worst_var99": min((s.get("var_99", 0) for s in strategies), default=0),
-                "worst_es": min((s.get("expected_shortfall", 0) for s in strategies), default=0),
-                "avg_fragility": np.mean([s.get("fragility_score", 0) for s in strategies]) if strategies else 0,
-                "max_fragility": max((s.get("fragility_score", 0) for s in strategies), default=0),
-                "strategies_count": len(strategies),
-            }
-            sections.append(f"PORTFOLIO GREEKS AGGREGATE:\n{json.dumps(portfolio_greeks, default=str)}")
-            sections.append(f"INDIVIDUAL STRATEGIES:\n{self._format_strategies(strategies, top_n=10)}")
-
-        if context.regime:
-            sections.append(f"REGIME:\n{self._format_dict(context.regime)}")
-
-        return "\n\n".join(sections)
+            tot_d = sum(s.get("delta_exposure", 0) for s in strategies)
+            tot_g = sum(s.get("gamma_exposure", 0) for s in strategies)
+            tot_v = sum(s.get("vega_exposure", 0) for s in strategies)
+            tot_t = sum(s.get("theta_exposure", 0) for s in strategies)
+            tot_m = sum(s.get("margin_required", 0) for s in strategies)
+            worst_var = min((s.get("var_99", 0) for s in strategies), default=0)
+            worst_es = min((s.get("expected_shortfall", 0) for s in strategies), default=0)
+            max_frag = max((s.get("fragility_score", 0) for s in strategies), default=0)
+            lines.append(f"portfolio: delta={tot_d:.1f} gamma={tot_g:.4f} vega={tot_v:.1f} theta={tot_t:.1f}")
+            lines.append(f"total_margin={tot_m:.0f} worst_var99={worst_var:.0f} worst_es={worst_es:.0f} max_fragility={max_frag:.2f}")
+            lines.append(f"count={len(strategies)} strategies:")
+            for s in strategies:
+                lines.append(
+                    f"  {s.get('strategy_type','?')} K={s.get('strikes','')} "
+                    f"EV={s.get('expected_value',0):.0f} VaR99={s.get('var_99',0):.0f} "
+                    f"ES={s.get('expected_shortfall',0):.0f} MaxLoss={s.get('max_loss',0):.0f} "
+                    f"frag={s.get('fragility_score',0):.2f} margin={s.get('margin_required',0):.0f}"
+                )
+        rg = context.regime or {}
+        if rg:
+            lines.append(f"regime={rg.get('regime','?')} conf={rg.get('confidence','')}")
+        return "\n".join(lines)

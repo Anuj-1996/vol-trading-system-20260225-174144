@@ -22,4 +22,15 @@ data/*.db
 # OS / editor
 .vscode/
 .idea/
-backlog.log
+
+.logs/
+*.log
+*.bak
+*.tmp
+*.swp
+*.swo
+*.zip
+*.tar.gz
+*.egg-info/
+backend.log
+frontend.log

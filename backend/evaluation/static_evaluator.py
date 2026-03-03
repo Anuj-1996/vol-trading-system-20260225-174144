@@ -199,6 +199,70 @@ class StaticEvaluationEngine:
             parts.append(f"{ratio_str}{int(leg.strike)}{leg.option_type}{arrow}")
         return ' '.join(parts)
 
+    @staticmethod
+    def _market_net_premium(legs: Tuple[Leg, ...], market_mid: Dict[tuple, float]) -> Optional[float]:
+        """Compute net premium from actual market mid-prices. Returns None if any leg is missing."""
+        total = 0.0
+        for leg in legs:
+            mp = market_mid.get((leg.strike, leg.option_type))
+            if mp is None or mp <= 0:
+                return None
+            total += leg.direction * leg.ratio * mp
+        return total
+
+    @staticmethod
+    def _market_net_premium_slipped(
+        legs: Tuple[Leg, ...],
+        market_bid_ask: Dict[tuple, tuple],
+        spot: float = 0.0,
+    ) -> Optional[float]:
+        """Compute net premium with realistic slippage.
+
+        Key insight: deep ITM options often have inflated mid-prices due to
+        stale/wide quotes, but in practice you can only sell them near
+        intrinsic value.  We cap the sell price of any option at
+        intrinsic + 5% of intrinsic (time value allowance).  For OTM
+        options we apply a moneyness-scaled impact cost.
+
+        Buy  (direction +1): pay ask + impact cost
+        Sell (direction -1): receive min(bid, intrinsic_cap) - impact cost
+
+        Returns None if any leg is missing bid/ask data.
+        """
+        total = 0.0
+        for leg in legs:
+            ba = market_bid_ask.get((leg.strike, leg.option_type))
+            if ba is None or ba[0] <= 0 or ba[1] <= 0:
+                return None
+            bid, ask = ba
+
+            # Compute intrinsic value
+            if leg.option_type == 'C':
+                intrinsic = max(spot - leg.strike, 0.0)
+            else:
+                intrinsic = max(leg.strike - spot, 0.0)
+
+            # Moneyness-based impact cost for OTM options
+            impact_pct = 0.0
+            if spot > 0:
+                moneyness_pct = abs(leg.strike - spot) / spot * 100.0
+                if moneyness_pct > 2.0:
+                    impact_pct = min((moneyness_pct - 2.0) * 0.5, 5.0) / 100.0
+
+            if leg.direction > 0:
+                # Buying: pay ask + impact
+                fill_price = ask * (1.0 + impact_pct)
+            else:
+                # Selling: cap at intrinsic + 5% time value allowance
+                # Deep ITM quotes are unreliable; you won't get filled at mid
+                intrinsic_cap = intrinsic * 1.05 + 1.0  # +1 prevents zero
+                effective_bid = min(bid, intrinsic_cap)
+                fill_price = effective_bid * (1.0 - impact_pct)
+                fill_price = max(fill_price, 0.01)
+
+            total += leg.direction * leg.ratio * fill_price
+        return total
+
     @log_execution_time
     def evaluate(
         self,
@@ -208,8 +272,10 @@ class StaticEvaluationEngine:
         T: float = 0.02,
         r: float = 0.065,
         iv_lookup: Optional[IVLookup] = None,
+        market_mid: Optional[Dict[tuple, float]] = None,
+        market_bid_ask: Optional[Dict[tuple, tuple]] = None,
     ) -> Tuple[List[StrategyMetrics], Dict[str, np.ndarray]]:
-        self._logger.info("START | evaluate | strategies=%d | sample_size=%d", len(strategies), terminal_prices.size)
+        self._logger.info("START | evaluate | strategies=%d | sample_size=%d | market_overrides=%s", len(strategies), terminal_prices.size, market_mid is not None)
 
         # Default IV lookup: flat 20% vol
         if iv_lookup is None:
@@ -251,6 +317,18 @@ class StaticEvaluationEngine:
 
                 has_underlying = strategy.strategy_type in ("Covered Call", "Protective Put", "Protective Collar")
                 net_premium = vol_core.compute_net_premium(leg_dicts, spot, T, r, iv_cache)
+
+                # Override with slippage-adjusted bid/ask prices when available
+                if market_bid_ask:
+                    mkt_slipped = self._market_net_premium_slipped(legs, market_bid_ask, spot)
+                    if mkt_slipped is not None:
+                        self._logger.debug("SLIPPAGE_OVERRIDE | %s | model=%.4f | slipped=%.4f", strategy.strategy_type, net_premium, mkt_slipped)
+                        net_premium = mkt_slipped
+                elif market_mid:
+                    mkt_np = self._market_net_premium(legs, market_mid)
+                    if mkt_np is not None:
+                        self._logger.debug("MARKET_OVERRIDE | %s | model=%.4f | market=%.4f", strategy.strategy_type, net_premium, mkt_np)
+                        net_premium = mkt_np
 
                 strategy_batch.append({
                     "legs": leg_dicts,
@@ -310,6 +388,18 @@ class StaticEvaluationEngine:
 
             # 2. Net premium cost (positive = debit paid)
             net_premium = self._compute_net_premium(legs, spot, T, r, iv_lookup)
+
+            # Override with slippage-adjusted bid/ask prices when available
+            if market_bid_ask:
+                mkt_slipped = self._market_net_premium_slipped(legs, market_bid_ask, spot)
+                if mkt_slipped is not None:
+                    self._logger.debug("SLIPPAGE_OVERRIDE | %s | model=%.4f | slipped=%.4f", strategy.strategy_type, net_premium, mkt_slipped)
+                    net_premium = mkt_slipped
+            elif market_mid:
+                mkt_np = self._market_net_premium(legs, market_mid)
+                if mkt_np is not None:
+                    self._logger.debug("MARKET_OVERRIDE | %s | model=%.4f | market=%.4f", strategy.strategy_type, net_premium, mkt_np)
+                    net_premium = mkt_np
 
             # 3. PnL = payoff - net_premium
             # For covered call / protective put, add underlying P&L

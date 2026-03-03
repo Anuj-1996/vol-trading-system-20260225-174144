@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import ReactDOM from 'react-dom';
 import Plot from 'react-plotly.js';
 import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
 
@@ -152,6 +151,88 @@ function densifyMatrix(strikeAxis, maturityAxis, matrix, strikeFactor = 6, matur
   return { strikeDense, maturityDense, matrixDense };
 }
 
+function downsampleAxis(axis, maxLength) {
+  const source = Array.isArray(axis) ? axis.map((value) => Number(value)).filter(Number.isFinite) : [];
+  if (source.length <= maxLength) {
+    return { values: source, indexes: source.map((_, index) => index) };
+  }
+  const indexes = [];
+  const values = [];
+  const step = (source.length - 1) / (maxLength - 1);
+  for (let index = 0; index < maxLength; index += 1) {
+    const sourceIndex = Math.round(index * step);
+    indexes.push(sourceIndex);
+    values.push(source[sourceIndex]);
+  }
+  return { values, indexes };
+}
+
+function downsampleMatrix2D(matrix, rowIndexes, colIndexes) {
+  return rowIndexes.map((rowIndex) =>
+    colIndexes.map((colIndex) => Number(matrix?.[rowIndex]?.[colIndex] ?? 0)),
+  );
+}
+
+function buildFrequencyAxis(length) {
+  const half = Math.floor(length / 2);
+  return Array.from({ length: half + 1 }, (_, index) => index / Math.max(length, 1));
+}
+
+function dftMagnitude1D(values) {
+  const source = Array.isArray(values) ? values.map((value) => Number(value)) : [];
+  const length = source.length;
+  if (!length) {
+    return [];
+  }
+  const half = Math.floor(length / 2);
+  return Array.from({ length: half + 1 }, (_, freqIndex) => {
+    let real = 0;
+    let imag = 0;
+    for (let sampleIndex = 0; sampleIndex < length; sampleIndex += 1) {
+      const angle = (2 * Math.PI * freqIndex * sampleIndex) / length;
+      real += source[sampleIndex] * Math.cos(angle);
+      imag -= source[sampleIndex] * Math.sin(angle);
+    }
+    return Math.sqrt(real * real + imag * imag) / length;
+  });
+}
+
+function dftMagnitude2D(matrix) {
+  const rows = Array.isArray(matrix) ? matrix.length : 0;
+  const cols = rows ? (Array.isArray(matrix[0]) ? matrix[0].length : 0) : 0;
+  if (!rows || !cols) {
+    return { strikeFreq: [], maturityFreq: [], magnitude: [] };
+  }
+
+  const rowHalf = Math.floor(rows / 2);
+  const colHalf = Math.floor(cols / 2);
+  const magnitude = [];
+
+  for (let rowFreq = 0; rowFreq <= rowHalf; rowFreq += 1) {
+    const spectrumRow = [];
+    for (let colFreq = 0; colFreq <= colHalf; colFreq += 1) {
+      let real = 0;
+      let imag = 0;
+      for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+        for (let colIndex = 0; colIndex < cols; colIndex += 1) {
+          const angle = (2 * Math.PI * ((rowFreq * rowIndex) / rows + (colFreq * colIndex) / cols));
+          const value = Number(matrix[rowIndex][colIndex] ?? 0);
+          real += value * Math.cos(angle);
+          imag -= value * Math.sin(angle);
+        }
+      }
+      spectrumRow.push(Math.sqrt(real * real + imag * imag) / (rows * cols));
+    }
+    magnitude.push(spectrumRow);
+  }
+
+  return {
+    strikeFreq: buildFrequencyAxis(cols),
+    maturityFreq: buildFrequencyAxis(rows),
+    magnitude,
+  };
+}
+
 export default function SurfacePage({
   loading,
   activeSnapshotId,
@@ -163,7 +244,6 @@ export default function SurfacePage({
   const [sliceExpiryIndex, setSliceExpiryIndex] = useState(0);
   const [sliceStrikeIndex, setSliceStrikeIndex] = useState(0);
   const [logMoneyness, setLogMoneyness] = useState(false);
-  const [maximizedChart, setMaximizedChart] = useState(null);
 
   const strikeGrid = Array.isArray(surface?.strike_grid) ? surface.strike_grid : [];
   const maturityGrid = Array.isArray(surface?.maturity_grid) ? surface.maturity_grid : [];
@@ -246,6 +326,50 @@ export default function SurfacePage({
   };
   const marketKDE = computeKDE(marketIvDistribution);
   const modelKDE = computeKDE(modelIvDistribution);
+  const frequencyDomain = useMemo(() => {
+    const rowAxis = downsampleAxis(maturityGrid, 14);
+    const colAxis = downsampleAxis(strikeGrid, 28);
+    const matrix = downsampleMatrix2D(smoothedModelMatrix, rowAxis.indexes, colAxis.indexes);
+    const spectrum = dftMagnitude2D(matrix);
+    const powerSpectrum = spectrum.magnitude.map((row) =>
+      row.map((value) => {
+        const magnitude = Math.max(0, Number(value) || 0);
+        return magnitude * magnitude;
+      }),
+    );
+
+    let dominantValue = -Infinity;
+    let dominantRowIndex = 0;
+    let dominantColIndex = 0;
+    for (let rowIndex = 0; rowIndex < powerSpectrum.length; rowIndex += 1) {
+      for (let colIndex = 0; colIndex < (powerSpectrum[rowIndex] || []).length; colIndex += 1) {
+        if (rowIndex === 0 && colIndex === 0) {
+          continue;
+        }
+        const value = powerSpectrum[rowIndex][colIndex];
+        if (value > dominantValue) {
+          dominantValue = value;
+          dominantRowIndex = rowIndex;
+          dominantColIndex = colIndex;
+        }
+      }
+    }
+
+    const expiryRow = smoothedModelMatrix[sliceExpiryIndex] || [];
+    const expirySpectrum = dftMagnitude1D(expiryRow).map((value) => Math.log10(1 + Math.max(0, value)));
+    const expiryFrequencyAxis = buildFrequencyAxis(expiryRow.length);
+
+    return {
+      strikeFreq: spectrum.strikeFreq,
+      maturityFreq: spectrum.maturityFreq,
+      dominantMaturityFreq: spectrum.maturityFreq[dominantRowIndex] ?? 0,
+      dominantStrikeFreq: spectrum.strikeFreq[dominantColIndex] ?? 0,
+      dominantPower: Number.isFinite(dominantValue) ? dominantValue : 0,
+      powerSpectrum,
+      expirySpectrum,
+      expiryFrequencyAxis,
+    };
+  }, [maturityGrid, strikeGrid, smoothedModelMatrix, sliceExpiryIndex]);
 
   useEffect(() => {
     setSliceExpiryIndex(selectedExpiryIndex);
@@ -255,7 +379,7 @@ export default function SurfacePage({
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
       <div className="page-surface-grid">
         <div className="surface-hero">
-          <Panel title="Market + Model Combined Surface 3D" onMaximize={() => setMaximizedChart('hero')}>
+          <Panel title="Market + Model Combined Surface 3D" enableCopyPlot>
             <Plot
               data={singleExpiry
                 ? [
@@ -288,7 +412,7 @@ export default function SurfacePage({
           </Panel>
         </div>
 
-        <Panel title="Market IV Surface 3D" onMaximize={() => setMaximizedChart('market')}>
+        <Panel title="Market IV Surface 3D" enableCopyPlot>
           <Plot
             data={singleExpiry
               ? [{ type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: marketMatrix[0] || [], line: { color: '#22c55e', width: 2 }, name: 'Market Smile' }]
@@ -313,7 +437,7 @@ export default function SurfacePage({
           />
         </Panel>
 
-        <Panel title="Model IV Surface 3D" onMaximize={() => setMaximizedChart('model')}>
+        <Panel title="Model IV Surface 3D" enableCopyPlot>
           <Plot
             data={singleExpiry
               ? [{ type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: smoothedModelMatrix[0] || [], line: { color: '#f59e0b', width: 2, shape: 'spline', smoothing: 1.1 }, name: 'Model Smile' }]
@@ -349,7 +473,7 @@ export default function SurfacePage({
             useResizeHandler
           />
         </Panel>
-        <Panel title="Residual IV Surface 3D" onMaximize={() => setMaximizedChart('residual')}>
+        <Panel title="Residual IV Surface 3D" enableCopyPlot>
           <Plot
             data={singleExpiry
               ? [{ type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: displayResidualMatrix[0] || [], line: { color: '#f43f5e', width: 2 }, name: 'Residual' },
@@ -384,7 +508,7 @@ export default function SurfacePage({
             useResizeHandler
           />
         </Panel>
-        <Panel title="Max Pain by Expiry">
+        <Panel title="Max Pain by Expiry" enableCopyPlot>
           <Plot
             data={[
               {
@@ -440,7 +564,7 @@ export default function SurfacePage({
           />
         </Panel>
 
-        <Panel title="Distribution Plots (KDE)">
+        <Panel title="Distribution Plots (KDE)" enableCopyPlot>
           <Plot
             data={[
               {
@@ -485,6 +609,99 @@ export default function SurfacePage({
             <div><span>Model IV Mean</span><strong>{formatNumber(modelIvDistribution.length ? modelIvDistribution.reduce((a, b) => a + b, 0) / modelIvDistribution.length : 0, 6)}</strong></div>
           </div>
         </Panel>
+        <Panel title="Frequency-Domain Volatility (Signal Spectrum)" enableCopyPlot>
+          {!singleExpiry && frequencyDomain.powerSpectrum.length ? (
+            <>
+              <Plot
+                data={[
+                  {
+                    type: 'surface',
+                    x: frequencyDomain.strikeFreq,
+                    y: frequencyDomain.maturityFreq,
+                    z: frequencyDomain.powerSpectrum,
+                    colorscale: 'Turbo',
+                    showscale: true,
+                    colorbar: { title: 'Power |DFT|^2' },
+                    hovertemplate:
+                      'Strike Freq: %{x:.3f}<br>Maturity Freq: %{y:.3f}<br>Power: %{z:.6f}<extra></extra>',
+                  },
+                ]}
+                layout={{
+                  height: 220,
+                  margin: { l: 26, r: 18, b: 20, t: 16 },
+                  paper_bgcolor: '#0a0f19',
+                  font: { color: '#d1d5db', size: 10 },
+                  scene: {
+                    xaxis: { title: 'Strike Frequency' },
+                    yaxis: { title: 'Maturity Frequency' },
+                    zaxis: { title: 'Spectral Power' },
+                    bgcolor: '#0a0f19',
+                  },
+                }}
+                config={{ displaylogo: false, responsive: true }}
+                style={{ width: '100%' }}
+                useResizeHandler
+              />
+              <Plot
+                data={[
+                  {
+                    type: 'heatmap',
+                    x: frequencyDomain.strikeFreq,
+                    y: frequencyDomain.maturityFreq,
+                    z: frequencyDomain.powerSpectrum,
+                    colorscale: 'Turbo',
+                    hovertemplate:
+                      'Strike Freq: %{x:.3f}<br>Maturity Freq: %{y:.3f}<br>Power: %{z:.6f}<extra></extra>',
+                  },
+                ]}
+                layout={{
+                  height: 180,
+                  margin: { l: 34, r: 18, b: 30, t: 12 },
+                  paper_bgcolor: '#0a0f19',
+                  plot_bgcolor: '#0a0f19',
+                  font: { color: '#d1d5db', size: 10 },
+                  xaxis: { title: 'Strike Frequency', gridcolor: '#1f2937' },
+                  yaxis: { title: 'Maturity Frequency', gridcolor: '#1f2937' },
+                }}
+                config={{ displaylogo: false, responsive: true }}
+                style={{ width: '100%' }}
+                useResizeHandler
+              />
+            </>
+          ) : (
+            <Plot
+              data={[
+                {
+                  type: 'scatter',
+                  mode: 'lines+markers',
+                  x: frequencyDomain.expiryFrequencyAxis,
+                  y: frequencyDomain.expirySpectrum,
+                  line: { color: '#38bdf8', width: 2 },
+                  marker: { color: '#38bdf8', size: 5 },
+                  name: 'Expiry Spectrum',
+                },
+              ]}
+              layout={{
+                height: 220,
+                margin: { l: 34, r: 18, b: 30, t: 16 },
+                paper_bgcolor: '#0a0f19',
+                plot_bgcolor: '#0a0f19',
+                font: { color: '#d1d5db', size: 10 },
+                xaxis: { title: 'Strike Frequency', gridcolor: '#1f2937' },
+                yaxis: { title: 'Power |DFT|^2', gridcolor: '#1f2937' },
+              }}
+              config={{ displaylogo: false, responsive: true }}
+              style={{ width: '100%' }}
+              useResizeHandler
+            />
+          )}
+          <div className="metric-strip">
+            <div><span>Dominant Strike Freq</span><strong>{formatNumber(frequencyDomain.dominantStrikeFreq, 4)}</strong></div>
+            <div><span>Dominant Maturity Freq</span><strong>{formatNumber(frequencyDomain.dominantMaturityFreq, 4)}</strong></div>
+            <div><span>Dominant Spectral Power</span><strong>{formatNumber(frequencyDomain.dominantPower, 6)}</strong></div>
+            <div><span>Transform Basis</span><strong>2D DFT (Model IV)</strong></div>
+          </div>
+        </Panel>
         <Panel title="Heston Calibration">
           {surface?.calibration ? (
             <div className="kv-grid two-col compact">
@@ -501,7 +718,7 @@ export default function SurfacePage({
             <p style={{color:'#6b7280', fontSize:'0.75rem'}}>Run pipeline to see calibration parameters.</p>
           )}
         </Panel>
-        <Panel title="Slice Viewer" className="surface-slice-wide">
+        <Panel title="Slice Viewer" className="surface-slice-wide" enableCopyPlot>
           <div className="slice-controls">
             <label>Select Expiry
               <input
@@ -603,61 +820,6 @@ export default function SurfacePage({
         </Panel>
       </div>
 
-      {/* Fullscreen overlay for maximized 3D chart */}
-      {maximizedChart && !singleExpiry && ReactDOM.createPortal(
-        <div className="chart-fullscreen-overlay">
-          <div className="fullscreen-header">
-            <span>{maximizedChart === 'hero' ? 'Market + Model Combined Surface 3D' : maximizedChart === 'market' ? 'Market IV Surface 3D' : maximizedChart === 'residual' ? 'Residual IV Surface 3D' : 'Model IV Surface 3D'}</span>
-            <button className="close-btn" onClick={() => setMaximizedChart(null)} type="button">✕ Close</button>
-          </div>
-          <div className="fullscreen-body">
-            <Plot
-              data={
-                maximizedChart === 'hero'
-                  ? [
-                      { type: 'surface', x: strikeGrid, y: maturityGrid, z: marketMatrix, colorscale: 'Viridis', opacity: 0.92, showscale: false, name: 'Market', text: marketExpiryText, hovertemplate: 'Strike: %{x:.0f}<br>Expiry: %{text}<br>IV: %{z:.4f}<extra>Market</extra>' },
-                      { type: 'surface', x: denseModelSurface.strikeDense, y: denseModelSurface.maturityDense, z: denseModelSurface.matrixDense, colorscale: 'Portland', opacity: 0.72, showscale: true, name: 'Model', hovertemplate: 'Strike: %{x:.0f}<br>IV: %{z:.4f}<extra>Model</extra>' },
-                    ]
-                  : maximizedChart === 'market'
-                  ? [{ type: 'surface', x: strikeGrid, y: maturityGrid, z: marketMatrix, colorscale: 'Viridis', text: marketExpiryText, hovertemplate: 'Strike: %{x:.0f}<br>Expiry: %{text}<br>IV: %{z:.4f}<extra></extra>' }]
-                  : maximizedChart === 'residual'
-                  ? [{
-                      type: 'surface',
-                      x: strikeGrid,
-                      y: maturityGrid,
-                      z: displayResidualMatrix,
-                      colorscale: [[0,'#3b82f6'],[0.5,'#111827'],[1,'#ef4444']],
-                      showscale: true,
-                      colorbar: { title: 'Residual', tickformat: '.4f' },
-                      cmid: 0,
-                      hovertemplate: 'Strike: %{x:.0f}<br>Residual: %{z:.4f}<extra></extra>',
-                    }]
-                  : [{
-                      type: 'surface',
-                      x: denseModelSurface.strikeDense,
-                      y: denseModelSurface.maturityDense,
-                      z: denseModelSurface.matrixDense,
-                      colorscale: 'Portland',
-                      showscale: true,
-                      contours: { z: { show: false } },
-                      hovertemplate: 'Strike: %{x:.0f}<br>IV: %{z:.4f}<extra>Model</extra>',
-                    }]
-              }
-              layout={{
-                height: window.innerHeight - 60,
-                margin: { l: 20, r: 20, b: 20, t: 20 },
-                paper_bgcolor: '#0a0f19',
-                font: { color: '#d1d5db', size: 12 },
-                scene: { xaxis: { title: 'Strike' }, yaxis: expiryYAxis, zaxis: { title: maximizedChart === 'residual' ? 'Residual IV' : 'IV' }, bgcolor: '#0a0f19' },
-              }}
-              config={{ displaylogo: false, responsive: true }}
-              style={{ width: '100%', height: '100%' }}
-              useResizeHandler
-            />
-          </div>
-        </div>,
-        document.body,
-      )}
     </SnapshotGuard>
   );
 }

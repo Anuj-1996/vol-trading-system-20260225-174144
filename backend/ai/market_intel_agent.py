@@ -23,64 +23,33 @@ class MarketIntelAgent(BaseAgent):
 
     @property
     def system_prompt(self) -> str:
-        return """You are the Market Intelligence Agent for an institutional-grade NIFTY options volatility trading system.
-
-ROLE: Senior quantitative market analyst at a volatility arbitrage desk.
-
-CAPABILITIES:
-- Interpret ATM implied volatility, realized volatility spreads, IV rank, IV percentile
-- Analyze regime classifications (low_vol, normal, high_vol, crisis) and transition signals
-- Read volatility term structure for backwardation/contango signals
-- Interpret open interest profiles and max pain levels
-- Detect unusual skew patterns (put skew elevation, call wing richness)
-- Assess vol-of-vol (VVIX equivalent) for gamma trading signals
-- Identify mean-reversion vs trending vol environments
-
-OUTPUT FORMAT:
-Structure your analysis as:
-
-**REGIME STATUS**: [Current regime + confidence + key driver]
-**VOLATILITY SNAPSHOT**: [ATM IV, RV spread, IV rank interpretation]
-**TERM STRUCTURE**: [Contango/backwardation, roll dynamics]
-**SKEW & FLOW**: [Put/call skew, OI buildup, max pain implications]
-**KEY SIGNAL**: [Single most actionable insight for the trading desk]
-
-RULES:
-- Be precise with numbers. Quote exact values from the data.
-- When IV rank < 30, flag as low-vol opportunity window.
-- When realized-implied spread is negative, highlight vol selling edge.
-- When regime confidence < 60%, warn about regime transition risk.
-- Never speculate without data. If data is missing, state it explicitly.
-- Use concise, institutional-grade language. No filler."""
+        return """You are a NIFTY options market intelligence analyst.
+Analyze: regime (low_vol/normal/high_vol/crisis), ATM IV, RV spread, IV rank, term structure, skew, max pain.
+Output: REGIME STATUS, VOLATILITY SNAPSHOT, TERM STRUCTURE, SKEW & FLOW, KEY SIGNAL.
+Be precise with numbers. Concise answers only."""
 
     def build_context_prompt(self, context: AgentContext) -> str:
-        sections = ["--- MARKET DATA FOR ANALYSIS ---"]
-
-        if context.market_overview:
-            sections.append(f"MARKET OVERVIEW:\n{self._format_dict(context.market_overview)}")
-
-        if context.regime:
-            sections.append(f"REGIME CLASSIFICATION:\n{self._format_dict(context.regime)}")
-
+        lines = []
+        mo = context.market_overview or {}
+        for k in ["spot", "atm_market_iv", "atm_model_iv", "rv_20d", "iv_rank",
+                  "iv_percentile", "realized_implied_spread"]:
+            if k in mo:
+                lines.append(f"{k}={mo[k]}")
+        rg = context.regime or {}
+        for k in ["regime", "confidence", "vol_regime_score", "trend"]:
+            if k in rg:
+                lines.append(f"{k}={rg[k]}")
         if context.surface:
-            surface_summary = {}
-            for key in ["strike_grid", "maturity_grid", "expiry_labels", "max_pain_by_expiry"]:
-                if key in context.surface:
-                    val = context.surface[key]
-                    if isinstance(val, list) and len(val) > 15:
-                        surface_summary[key] = val[:15]
-                        surface_summary[f"_{key}_total"] = len(val)
-                    else:
-                        surface_summary[key] = val
-            if "market_iv_matrix" in context.surface:
-                matrix = context.surface["market_iv_matrix"]
-                if isinstance(matrix, list) and matrix:
-                    import numpy as np
-                    arr = np.array(matrix, dtype=float)
-                    surface_summary["iv_matrix_shape"] = list(arr.shape)
-                    surface_summary["iv_min"] = round(float(arr.min()), 6)
-                    surface_summary["iv_max"] = round(float(arr.max()), 6)
-                    surface_summary["iv_mean"] = round(float(arr.mean()), 6)
-            sections.append(f"SURFACE SUMMARY:\n{self._format_dict(surface_summary)}")
-
-        return "\n\n".join(sections)
+            s = context.surface
+            if "expiry_labels" in s:
+                lines.append(f"expiries={s['expiry_labels']}")
+            if "max_pain_by_expiry" in s:
+                labels = s.get("expiry_labels", [])
+                mp = s["max_pain_by_expiry"]
+                pairs = [f"{labels[i]}:{mp[i]}" for i in range(min(len(labels), len(mp)))]
+                lines.append(f"max_pain={','.join(pairs)}")
+            if "market_iv_matrix" in s:
+                import numpy as np
+                arr = np.array(s["market_iv_matrix"], dtype=float)
+                lines.append(f"iv_range=[{arr.min():.4f},{arr.max():.4f}] mean={arr.mean():.4f}")
+        return "\n".join(lines)

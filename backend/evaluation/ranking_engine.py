@@ -64,6 +64,11 @@ class RankingEngine:
                 - lambda_fragility * fragility
                 + lambda_rom * float(normalized_rom[idx])
             )
+            # Realism penalty: strategies with zero VaR and zero P(Loss)
+            # are almost certainly unrealistic (deep ITM arb artifacts).
+            # Apply a heavy discount so they don't dominate rankings.
+            if metric.var_99 <= 0 and metric.probability_of_loss <= 0 and metric.max_loss <= 0:
+                score *= 0.30  # 70% penalty for "too good to be true"
             ranked.append(RankedStrategy(metrics=metric, fragility_score=fragility, overall_score=score))
 
         ranked_sorted = sorted(ranked, key=lambda item: item.overall_score, reverse=True)[: CONFIG.ranking.top_n]

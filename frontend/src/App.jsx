@@ -353,6 +353,9 @@ export default function App() {
           selectedStrategyId={selectedStrategyId}
           onSelectStrategy={setSelectedStrategyId}
           market={market}
+          onPortfolioAdd={() => {
+            // Auto-switch to portfolio page after adding
+          }}
         />
       );
     }
@@ -376,7 +379,7 @@ export default function App() {
       return <BacktestPage loading={loading} activeSnapshotId={activeSnapshotId} backtest={backtest} />;
     }
     if (activePage === 'portfolio') {
-      return <PortfolioPage loading={loading} activeSnapshotId={activeSnapshotId} portfolio={portfolio} />;
+      return <PortfolioPage loading={loading} activeSnapshotId={activeSnapshotId} market={market} />;
     }
     return renderSettingsPage();
   };

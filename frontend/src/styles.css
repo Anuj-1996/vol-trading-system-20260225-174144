@@ -172,6 +172,32 @@ textarea {
   justify-content: space-between;
 }
 
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.copy-plot-btn {
+  background: #0a0f19;
+  border: 1px solid #374151;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 0.65rem;
+  padding: 2px 8px;
+  border-radius: 3px;
+  line-height: 1.2;
+  transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+.copy-plot-btn:hover {
+  color: #38bdf8;
+  border-color: #38bdf8;
+}
+.copy-plot-btn.error {
+  color: #f87171;
+  border-color: #f87171;
+}
+
 .bbg-panel-header .maximize-btn {
   background: none;
   border: 1px solid #374151;
@@ -188,8 +214,8 @@ textarea {
   border-color: #f59e0b;
 }
 
-/* Fullscreen overlay for maximized charts */
-.chart-fullscreen-overlay {
+/* Fullscreen overlay for maximized panels */
+.panel-fullscreen-overlay {
   position: fixed;
   inset: 0;
   z-index: 9999;
@@ -198,7 +224,7 @@ textarea {
   flex-direction: column;
   overflow: hidden;
 }
-.chart-fullscreen-overlay .fullscreen-header {
+.panel-fullscreen-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -211,7 +237,7 @@ textarea {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.chart-fullscreen-overlay .fullscreen-header .close-btn {
+.panel-fullscreen-header .close-btn {
   background: none;
   border: 1px solid #374151;
   color: #9ca3af;
@@ -221,14 +247,20 @@ textarea {
   border-radius: 3px;
   transition: color 0.15s, border-color 0.15s;
 }
-.chart-fullscreen-overlay .fullscreen-header .close-btn:hover {
+.panel-fullscreen-header .close-btn:hover {
   color: #ef4444;
   border-color: #ef4444;
 }
-.chart-fullscreen-overlay .fullscreen-body {
+.panel-fullscreen-body {
   flex: 1;
-  overflow: hidden;
+  overflow: auto;
   padding: 8px;
+}
+.panel-fullscreen-panel {
+  height: 100%;
+}
+.panel-fullscreen-panel .bbg-panel-body {
+  height: 100%;
 }
 
 .bbg-panel-body {

@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import Plot from 'react-plotly.js';
-import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
+import { Panel, SnapshotGuard, formatNumber, formatRs, formatPctVal } from './shared.jsx';
 
 // ─── Helper: compute multi-leg intrinsic payoff at expiry ─────────────────
 function computeIntrinsicPayoff(spotAtExpiry, legs, netPremium) {
@@ -202,15 +202,15 @@ export default function StrategyDetailPage({ loading, activeSnapshotId, strategi
           <div className="kv-grid two-col compact">
             <div><span>Strategy</span><strong>{selected?.strategy_type || '-'}</strong></div>
             <div><span>Legs</span><strong>{selected?.legs_label || (Array.isArray(selected?.strikes) ? selected.strikes.join(', ') : '-')}</strong></div>
-            <div><span>Net Premium</span><strong>{formatNumber(netPremium, 2)}</strong></div>
+            <div><span>Net Premium</span><strong>{formatRs(netPremium)}</strong></div>
             <div><span>Expected Value</span><strong style={{ color: Number(selected?.expected_value ?? 0) >= 0 ? '#22c55e' : '#f43f5e' }}>{formatNumber(selected?.expected_value, 4)}</strong></div>
             <div><span>Return on Margin</span><strong>{formatNumber(selected?.return_on_margin, 6)}</strong></div>
-            <div><span>Overall Score</span><strong style={{ color: '#38bdf8' }}>{formatNumber(selected?.overall_score, 6)}</strong></div>
+            <div><span>Overall Score</span><strong style={{ color: '#38bdf8' }}>{formatPctVal(selected?.overall_score)}</strong></div>
             <div><span>P(Loss)</span><strong style={{ color: Number(selected?.probability_of_loss ?? 0) > 0.5 ? '#f43f5e' : '#22c55e' }}>{(Number(selected?.probability_of_loss ?? 0) * 100).toFixed(1)}%</strong></div>
-            <div><span>Max Loss</span><strong style={{ color: '#f43f5e' }}>{formatNumber(selected?.max_loss, 2)}</strong></div>
-            <div><span>VaR 95%</span><strong>{formatNumber(selected?.var_95, 4)}</strong></div>
-            <div><span>VaR 99%</span><strong>{formatNumber(selected?.var_99, 4)}</strong></div>
-            <div><span>Exp. Shortfall</span><strong>{formatNumber(selected?.expected_shortfall, 4)}</strong></div>
+            <div><span>Max Loss</span><strong style={{ color: '#f43f5e' }}>{formatRs(selected?.max_loss)}</strong></div>
+            <div><span>VaR 95%</span><strong>{formatRs(selected?.var_95)}</strong></div>
+            <div><span>VaR 99%</span><strong>{formatRs(selected?.var_99)}</strong></div>
+            <div><span>Exp. Shortfall</span><strong>{formatRs(selected?.expected_shortfall)}</strong></div>
             <div><span>Fragility</span><strong>{formatNumber(selected?.fragility_score, 6)}</strong></div>
             <div><span>Delta</span><strong>{formatNumber(selected?.delta_exposure, 4)}</strong></div>
             <div><span>Gamma</span><strong>{formatNumber(selected?.gamma_exposure, 6)}</strong></div>

@@ -15,6 +15,7 @@ from ..services.engine_service import LivePipelineRequest, PipelineRequest, Stra
 from ..services.job_service import AsyncJobService
 from ..simulation.dynamic_hedge import HedgeMode
 from ..ai.orchestrator_agent import OrchestratorAgent
+from ..data import portfolio_repository as portfolio_db
 
 
 class StaticPipelinePayload(BaseModel):
@@ -370,3 +371,168 @@ def ai_clear_conversation() -> dict:
     """Clear AI conversation history for a fresh session."""
     _orchestrator.clear_conversation()
     return {"status": "ok", "message": "Conversation cleared."}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Portfolio Endpoints
+# ──────────────────────────────────────────────────────────────────────
+
+
+class PortfolioAddPayload(BaseModel):
+    strategy: dict = Field(description="Full strategy object from the screener")
+    spot: float = Field(gt=0.0, description="Spot price at time of adding")
+
+
+@router.post("/portfolio/add")
+def portfolio_add(payload: PortfolioAddPayload) -> dict:
+    """Add a strategy to the persistent portfolio."""
+    _logger.info("START | portfolio_add | type=%s", payload.strategy.get("strategy_type"))
+    try:
+        position = portfolio_db.add_position(payload.strategy, payload.spot)
+        return {"status": "ok", "data": position}
+    except Exception as exc:
+        _logger.exception("ERROR | portfolio_add")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/portfolio/positions")
+def portfolio_list(status: str = "open") -> dict:
+    """List all portfolio positions."""
+    positions = portfolio_db.list_positions(status=status)
+    # Compute portfolio-level totals
+    totals = {"pnl": 0.0, "delta": 0.0, "gamma": 0.0, "vega": 0.0, "theta": 0.0, "margin": 0.0}
+    for pos in positions:
+        totals["pnl"] += float(pos.get("expected_value") or 0)
+        totals["delta"] += float(pos.get("delta_exposure") or 0)
+        totals["gamma"] += float(pos.get("gamma_exposure") or 0)
+        totals["vega"] += float(pos.get("vega_exposure") or 0)
+        totals["theta"] += float(pos.get("theta_exposure") or 0)
+        totals["margin"] += float(pos.get("margin_required") or 0)
+    return {"status": "ok", "data": {"positions": positions, "totals": totals}}
+
+
+@router.get("/portfolio/positions/{pos_id}")
+def portfolio_get(pos_id: str) -> dict:
+    """Get a single portfolio position by ID."""
+    position = portfolio_db.get_position(pos_id)
+    if position is None:
+        raise HTTPException(status_code=404, detail=f"Position {pos_id} not found")
+    return {"status": "ok", "data": position}
+
+
+@router.delete("/portfolio/positions/{pos_id}")
+def portfolio_delete(pos_id: str) -> dict:
+    """Delete a position from the portfolio (hard delete)."""
+    deleted = portfolio_db.delete_position(pos_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Position {pos_id} not found")
+    return {"status": "ok", "message": f"Position {pos_id} deleted"}
+
+
+@router.delete("/portfolio/clear")
+def portfolio_clear() -> dict:
+    """Delete ALL positions from the portfolio."""
+    count = portfolio_db.clear_all()
+    return {"status": "ok", "message": f"Cleared {count} positions"}
+
+
+@router.post("/portfolio/revalue")
+def portfolio_revalue() -> dict:
+    """
+    Revalue all open portfolio positions using the latest cached live data.
+
+    For each position, computes actual/live metrics (current spot, updated greeks,
+    live PnL) from the most recent NSE data and returns them alongside the
+    original expected metrics stored at entry time.
+    """
+    _logger.info("START | portfolio_revalue")
+    try:
+        positions = portfolio_db.list_positions(status="open")
+        if not positions:
+            return {"status": "ok", "data": {"positions": [], "totals": {
+                "expected_pnl": 0, "actual_pnl": 0, "delta": 0, "gamma": 0, "vega": 0, "theta": 0, "margin": 0,
+            }}}
+
+        # Try to get latest cached data for revaluation
+        from ..services.engine_service import _live_data_cache, _cache_lock
+        current_spot = None
+        with _cache_lock:
+            if _live_data_cache:
+                latest_key = max(_live_data_cache.keys(), key=lambda k: _live_data_cache[k].get("timestamp", ""))
+                cached = _live_data_cache[latest_key]
+                current_spot = cached.get("spot")
+
+        revalued = []
+        totals = {
+            "expected_pnl": 0.0, "actual_pnl": 0.0,
+            "delta": 0.0, "gamma": 0.0, "vega": 0.0, "theta": 0.0, "margin": 0.0,
+        }
+
+        for pos in positions:
+            spot_entry = float(pos.get("spot_at_entry") or 0)
+            expected_ev = float(pos.get("expected_value") or 0)
+            delta = float(pos.get("delta_exposure") or 0)
+            gamma = float(pos.get("gamma_exposure") or 0)
+            vega = float(pos.get("vega_exposure") or 0)
+            theta = float(pos.get("theta_exposure") or 0)
+            margin = float(pos.get("margin_required") or 0)
+            premium = float(pos.get("net_premium") or 0)
+            max_loss = float(pos.get("max_loss") or 0)
+
+            # Compute live/actual PnL using Greeks approximation
+            live_spot = current_spot if current_spot else spot_entry
+            spot_move = live_spot - spot_entry
+            spot_move_pct = spot_move / max(spot_entry, 1e-8)
+
+            # Taylor expansion: PnL ≈ delta * dS + 0.5 * gamma * dS^2 + theta * dt
+            # For simplicity, use spot_move as dS (normalised by lot)
+            actual_pnl = delta * spot_move_pct * spot_entry + 0.5 * gamma * (spot_move_pct ** 2) * spot_entry
+            # Cap loss at max_loss
+            actual_pnl = max(-abs(max_loss), actual_pnl + premium)
+
+            # Recompute VaR/ES from stored PnL distribution shifted by spot move
+            pnl_dist = pos.get("pnl_distribution", [])
+            if isinstance(pnl_dist, list) and len(pnl_dist) > 10:
+                import numpy as np
+                arr = np.array(pnl_dist, dtype=float)
+                shifted = arr + delta * spot_move_pct * spot_entry
+                actual_var95 = float(np.percentile(shifted, 5))
+                actual_var99 = float(np.percentile(shifted, 1))
+                actual_es = float(np.mean(shifted[shifted <= actual_var99])) if np.sum(shifted <= actual_var99) > 0 else actual_var99
+                actual_ev = float(np.mean(shifted))
+                actual_prob_loss = float(np.mean(shifted < 0))
+            else:
+                actual_var95 = float(pos.get("var_95") or 0)
+                actual_var99 = float(pos.get("var_99") or 0)
+                actual_es = float(pos.get("expected_shortfall") or 0)
+                actual_ev = actual_pnl
+                actual_prob_loss = float(pos.get("probability_of_loss") or 0)
+
+            revalued_pos = {
+                **pos,
+                "live_spot": live_spot,
+                "spot_change": spot_move,
+                "spot_change_pct": round(spot_move_pct * 100, 4),
+                "actual_pnl": round(actual_pnl, 4),
+                "actual_ev": round(actual_ev, 4),
+                "actual_var95": round(actual_var95, 4),
+                "actual_var99": round(actual_var99, 4),
+                "actual_es": round(actual_es, 4),
+                "actual_prob_loss": round(actual_prob_loss, 4),
+                "expected_pnl": expected_ev,
+            }
+            revalued.append(revalued_pos)
+
+            totals["expected_pnl"] += expected_ev
+            totals["actual_pnl"] += actual_pnl
+            totals["delta"] += delta
+            totals["gamma"] += gamma
+            totals["vega"] += vega
+            totals["theta"] += theta
+            totals["margin"] += margin
+
+        _logger.info("END | portfolio_revalue | positions=%d", len(revalued))
+        return {"status": "ok", "data": {"positions": revalued, "totals": totals, "live_spot": current_spot}}
+    except Exception as exc:
+        _logger.exception("ERROR | portfolio_revalue")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

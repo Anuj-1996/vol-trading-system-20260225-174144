@@ -65,6 +65,20 @@ class LivePipelineRequest:
 _live_data_cache: Dict[str, Dict[str, Any]] = {}
 _cache_lock = threading.Lock()
 
+NIFTY50_TICKERS = [
+    "ADANIENT.NS", "ADANIPORTS.NS", "APOLLOHOSP.NS", "ASIANPAINT.NS", "AXISBANK.NS",
+    "BAJAJ-AUTO.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "BEL.NS", "BHARTIARTL.NS",
+    "BPCL.NS", "BRITANNIA.NS", "CIPLA.NS", "COALINDIA.NS", "DRREDDY.NS",
+    "EICHERMOT.NS", "ETERNAL.NS", "GRASIM.NS", "HCLTECH.NS", "HDFCBANK.NS",
+    "HDFCLIFE.NS", "HEROMOTOCO.NS", "HINDALCO.NS", "HINDUNILVR.NS", "ICICIBANK.NS",
+    "INDUSINDBK.NS", "INFY.NS", "ITC.NS", "JIOFIN.NS", "JSWSTEEL.NS",
+    "KOTAKBANK.NS", "LT.NS", "M&M.NS", "MARUTI.NS", "NESTLEIND.NS",
+    "NTPC.NS", "ONGC.NS", "POWERGRID.NS", "RELIANCE.NS", "SBILIFE.NS",
+    "SBIN.NS", "SHRIRAMFIN.NS", "SUNPHARMA.NS", "TATACONSUM.NS", "TATAMOTORS.NS",
+    "TATASTEEL.NS", "TCS.NS", "TECHM.NS", "TITAN.NS", "TRENT.NS", "ULTRACEMCO.NS",
+    "WIPRO.NS",
+]
+
 
 class StrategyEngineService:
     def __init__(self) -> None:
@@ -349,6 +363,7 @@ class StrategyEngineService:
                 "vvix_equivalent": history_metrics["vvix_equivalent"],
                 "price_history": history_metrics["price_history"],
                 "vol_model_forecasts": history_metrics["vol_model_forecasts"],
+                "mmi_yf": history_metrics.get("mmi_yf"),
                 "data_source": "nse_live",
                 "nse_timestamp": cached["fetch_result"].timestamp,
             },
@@ -501,6 +516,183 @@ class StrategyEngineService:
         return np.sqrt(safe * 252.0)
 
     @staticmethod
+    def _rolling_normalize_100(series: pd.Series, window: int = 45) -> pd.Series:
+        values = pd.to_numeric(series, errors="coerce")
+        mean = values.rolling(window, min_periods=10).mean()
+        std = values.rolling(window, min_periods=10).std(ddof=0)
+        z = (values - mean) / std.replace(0.0, np.nan)
+        score = (50.0 + 15.0 * z).clip(lower=0.0, upper=100.0)
+        return score
+
+    def _fetch_tradingview_iv_proxy_latest(self) -> Optional[float]:
+        """
+        Fetch latest India VIX close from TradingView TA (if installed).
+        Returns annualized IV in decimal terms (e.g., 0.165 for 16.5%).
+        """
+        try:
+            from tradingview_ta import Interval, TA_Handler
+
+            handler = TA_Handler(
+                symbol="INDIAVIX",
+                screener="india",
+                exchange="NSE",
+                interval=Interval.INTERVAL_1_DAY,
+            )
+            analysis = handler.get_analysis()
+            close_value = None
+            if analysis is not None and isinstance(getattr(analysis, "indicators", None), dict):
+                close_value = analysis.indicators.get("close")
+            close_numeric = float(close_value) if close_value is not None else np.nan
+            if np.isfinite(close_numeric):
+                return close_numeric / 100.0
+        except Exception as exc:
+            self._logger.info("TRADINGVIEW_IV_PROXY_UNAVAILABLE | error=%s", exc)
+        return None
+
+    def _build_mmi_from_yfinance(self, index_close: pd.Series, period: str = "18mo") -> Optional[Dict[str, Any]]:
+        try:
+            import yfinance as yf
+        except Exception:
+            return None
+
+        base_close = pd.to_numeric(index_close, errors="coerce").dropna()
+        if base_close.empty or base_close.shape[0] < 60:
+            return None
+
+        idx = base_close.index
+        component_scores: Dict[str, pd.Series] = {}
+        component_meta: Dict[str, Dict[str, str]] = {
+            "volatility_skew": {"label": "Volatility & Skew (VIX)", "source": "^INDIAVIX"},
+            "momentum": {"label": "Momentum (EMA30-EMA90)", "source": "Index OHLC"},
+            "breadth": {"label": "Market Breadth (Modified Arms)", "source": "NIFTY 50 constituents"},
+            "price_strength": {"label": "Price Strength (Near 52W H/L)", "source": "NIFTY 50 constituents"},
+            "gold_demand": {"label": "Demand for Gold (2W rel)", "source": "GC=F vs Index"},
+        }
+
+        # Volatility and skew proxy from India VIX level.
+        try:
+            vix = yf.download("^INDIAVIX", period=period, interval="1d", auto_adjust=False, progress=False, threads=False)
+            if vix is not None and not vix.empty:
+                if isinstance(vix.columns, pd.MultiIndex):
+                    vix.columns = [col[0] for col in vix.columns]
+                if "Close" in vix.columns:
+                    vix_close = pd.to_numeric(vix["Close"], errors="coerce").reindex(idx)
+                    component_scores["volatility_skew"] = self._rolling_normalize_100(vix_close, 45)
+        except Exception as exc:
+            self._logger.warning("MMI_VIX_FETCH_FAIL | error=%s", exc)
+
+        # Momentum component.
+        ema30 = base_close.ewm(span=30, adjust=False).mean()
+        ema90 = base_close.ewm(span=90, adjust=False).mean()
+        momentum_raw = ((ema30 - ema90) / ema90.replace(0.0, np.nan)) * 100.0
+        component_scores["momentum"] = self._rolling_normalize_100(momentum_raw, 45)
+
+        # Gold demand component: 2-week relative return (gold - index).
+        try:
+            gold = yf.download("GC=F", period=period, interval="1d", auto_adjust=False, progress=False, threads=False)
+            if gold is not None and not gold.empty:
+                if isinstance(gold.columns, pd.MultiIndex):
+                    gold.columns = [col[0] for col in gold.columns]
+                if "Close" in gold.columns:
+                    gold_close = pd.to_numeric(gold["Close"], errors="coerce").reindex(idx)
+                    gold_ret_2w = gold_close.pct_change(10)
+                    idx_ret_2w = base_close.pct_change(10)
+                    gold_rel = (gold_ret_2w - idx_ret_2w) * 100.0
+                    component_scores["gold_demand"] = self._rolling_normalize_100(gold_rel, 45)
+        except Exception as exc:
+            self._logger.warning("MMI_GOLD_FETCH_FAIL | error=%s", exc)
+
+        # Breadth + price strength from NIFTY constituents.
+        try:
+            basket = yf.download(
+                NIFTY50_TICKERS,
+                period=period,
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
+            close_df = pd.DataFrame(index=idx)
+            volume_df = pd.DataFrame(index=idx)
+            if basket is not None and not basket.empty and isinstance(basket.columns, pd.MultiIndex):
+                cols = basket.columns
+                # Try shape: (field, ticker)
+                for ticker in NIFTY50_TICKERS:
+                    if ("Close", ticker) in cols:
+                        close_df[ticker] = pd.to_numeric(basket[("Close", ticker)], errors="coerce").reindex(idx)
+                    if ("Volume", ticker) in cols:
+                        volume_df[ticker] = pd.to_numeric(basket[("Volume", ticker)], errors="coerce").reindex(idx)
+                    # Alternate shape: (ticker, field)
+                    if (ticker, "Close") in cols and ticker not in close_df.columns:
+                        close_df[ticker] = pd.to_numeric(basket[(ticker, "Close")], errors="coerce").reindex(idx)
+                    if (ticker, "Volume") in cols and ticker not in volume_df.columns:
+                        volume_df[ticker] = pd.to_numeric(basket[(ticker, "Volume")], errors="coerce").reindex(idx)
+
+            if not close_df.empty:
+                returns = close_df.pct_change()
+                adv = (returns > 0).sum(axis=1).astype(float)
+                dec = (returns < 0).sum(axis=1).astype(float).replace(0.0, np.nan)
+                ad_ratio = adv / dec
+
+                up_vol = volume_df.where(returns > 0).sum(axis=1) if not volume_df.empty else pd.Series(index=idx, dtype=float)
+                down_vol = volume_df.where(returns < 0).sum(axis=1).replace(0.0, np.nan) if not volume_df.empty else pd.Series(index=idx, dtype=float)
+                ad_vol_ratio = up_vol / down_vol
+                breadth_raw = -(ad_ratio / ad_vol_ratio.replace(0.0, np.nan))
+                component_scores["breadth"] = self._rolling_normalize_100(breadth_raw, 45)
+
+                rolling_hi = close_df.rolling(252, min_periods=60).max()
+                rolling_lo = close_df.rolling(252, min_periods=60).min()
+                near_hi = (close_df >= (rolling_hi * 0.95)).sum(axis=1).astype(float)
+                near_lo = (close_df <= (rolling_lo * 1.05)).sum(axis=1).astype(float)
+                universe = close_df.notna().sum(axis=1).replace(0.0, np.nan).astype(float)
+                price_strength_raw = ((near_hi / universe) - (near_lo / universe)) * 100.0
+                component_scores["price_strength"] = self._rolling_normalize_100(price_strength_raw, 45)
+        except Exception as exc:
+            self._logger.warning("MMI_BREADTH_FETCH_FAIL | error=%s", exc)
+
+        if not component_scores:
+            return None
+
+        score_frame = pd.DataFrame(component_scores, index=idx).reindex(idx)
+        final = score_frame.mean(axis=1, skipna=True)
+        final[score_frame.notna().sum(axis=1) == 0] = np.nan
+
+        tail_len = min(180, len(idx))
+        tail_idx = idx[-tail_len:]
+        tail_final = final.reindex(tail_idx)
+        latest = float(tail_final.dropna().iloc[-1]) if not tail_final.dropna().empty else None
+        avg5 = float(tail_final.dropna().tail(5).mean()) if not tail_final.dropna().empty else None
+        missing_components = [name for name in ["fii_activity"] if name not in component_scores]
+
+        components_payload = []
+        for key, meta in component_meta.items():
+            values = score_frame.get(key)
+            components_payload.append({
+                "key": key,
+                "label": meta["label"],
+                "source": meta["source"],
+                "score": [
+                    float(value) if np.isfinite(value) else None
+                    for value in (values.reindex(tail_idx) if values is not None else pd.Series(index=tail_idx, dtype=float))
+                ],
+                "available": key in component_scores,
+            })
+
+        return {
+            "dates": [item.strftime("%Y-%m-%d") for item in tail_idx],
+            "final": [float(value) if np.isfinite(value) else None for value in tail_final.to_numpy(dtype=float)],
+            "components": components_payload,
+            "latest": latest,
+            "avg5": avg5,
+            "coverage": int(len(component_scores)),
+            "missing_components": missing_components,
+            "methodology_window_days": 45,
+            "normalization": "z-score mapped to 0-100 (50 + 15*z, clipped)",
+            "weighting": "equal",
+            "source": "yfinance",
+        }
+
+    @staticmethod
     def _fit_vol_models(log_returns: pd.Series, atm_market_iv: float, rv_20d: Optional[float]) -> Dict[str, Any]:
         if log_returns is None or log_returns.empty:
             return {"dates": [], "hv20": [], "rv20": [], "iv_proxy": [], "models": {}}
@@ -627,6 +819,7 @@ class StrategyEngineService:
                 "iv_percentile": None,
                 "vvix_equivalent": None,
                 "vol_model_forecasts": None,
+                "mmi_yf": None,
             }
 
         if history is None or history.empty:
@@ -642,6 +835,7 @@ class StrategyEngineService:
                 "iv_percentile": None,
                 "vvix_equivalent": None,
                 "vol_model_forecasts": None,
+                "mmi_yf": None,
             }
 
         frame = history.copy()
@@ -663,6 +857,7 @@ class StrategyEngineService:
                     "iv_percentile": None,
                     "vvix_equivalent": None,
                     "vol_model_forecasts": None,
+                    "mmi_yf": None,
                 }
 
         close = frame["Close"].astype(float)
@@ -678,8 +873,9 @@ class StrategyEngineService:
         rv_20d = trailing_realized(20)
         rv_60d = trailing_realized(60)
         vol_model_forecasts = self._fit_vol_models(log_returns=log_returns, atm_market_iv=atm_market_iv, rv_20d=rv_20d)
+        iv_proxy_source = None
 
-        # Add a proxy IV time-series using India VIX when available.
+        # Add a proxy IV time-series using India VIX from Yahoo when available.
         try:
             vix_history = yf.download(
                 "^INDIAVIX",
@@ -698,8 +894,21 @@ class StrategyEngineService:
                         float(value) if np.isfinite(value) else None
                         for value in vix_series.to_numpy(dtype=float)
                     ]
+                    iv_proxy_source = "yfinance_^INDIAVIX"
         except Exception:
             pass
+
+        # Prefer TradingView latest print when available (python-tradingview-ta).
+        tv_latest_iv = self._fetch_tradingview_iv_proxy_latest()
+        if tv_latest_iv is not None:
+            iv_proxy = list(vol_model_forecasts.get("iv_proxy", []))
+            if not iv_proxy:
+                iv_proxy = [None] * len(log_returns.index)
+            if iv_proxy:
+                iv_proxy[-1] = float(tv_latest_iv)
+            vol_model_forecasts["iv_proxy"] = iv_proxy
+            iv_proxy_source = "tradingview_ta_NSE_INDIAVIX_latest"
+        vol_model_forecasts["iv_proxy_source"] = iv_proxy_source
 
         rv20_series = log_returns.rolling(20).std(ddof=1).dropna() * annualizer
         if rv20_series.empty:
@@ -749,6 +958,7 @@ class StrategyEngineService:
             f"{iv_rank:.2f}" if iv_rank is not None else "None",
             f"{iv_percentile:.2f}" if iv_percentile is not None else "None",
         )
+        mmi_yf = self._build_mmi_from_yfinance(close, period="18mo")
 
         return {
             "ticker": ticker,
@@ -761,6 +971,7 @@ class StrategyEngineService:
             "iv_percentile": iv_percentile,
             "vvix_equivalent": vvix_equivalent,
             "vol_model_forecasts": vol_model_forecasts,
+            "mmi_yf": mmi_yf,
         }
 
     def _resolve_input_paths(self, file_path: str) -> List[Path]:
@@ -1101,6 +1312,7 @@ class StrategyEngineService:
                 "vvix_equivalent": history_metrics["vvix_equivalent"],
                 "price_history": history_metrics["price_history"],
                 "vol_model_forecasts": history_metrics["vol_model_forecasts"],
+                "mmi_yf": history_metrics.get("mmi_yf"),
             },
             "surface": {
                 "strike_grid": surface.strike_grid.tolist(),
@@ -1365,6 +1577,7 @@ class StrategyEngineService:
                 "iv_percentile": history_metrics["iv_percentile"],
                 "vvix_equivalent": history_metrics["vvix_equivalent"],
                 "vol_model_forecasts": history_metrics["vol_model_forecasts"],
+                "mmi_yf": history_metrics.get("mmi_yf"),
                 "data_source": "nse_live",
             },
             "surface": {

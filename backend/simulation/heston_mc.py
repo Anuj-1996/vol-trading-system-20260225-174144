@@ -11,6 +11,12 @@ from ..exceptions import SimulationError
 from ..logger import get_logger
 from ..calibration.heston_fft import JointHestonParameters
 
+try:
+    from ..cpp import vol_core, HAS_CPP
+except Exception:
+    vol_core = None  # type: ignore
+    HAS_CPP = False
+
 
 @dataclass(frozen=True)
 class SimulationResult:
@@ -59,6 +65,29 @@ class HestonMonteCarloEngine:
             )
 
         try:
+            # ── C++ fast path ──
+            if HAS_CPP and vol_core is not None:
+                terminal, price_paths_raw, vol_paths_raw = vol_core.heston_mc(
+                    params.kappa, params.theta, params.xi, params.rho, params.v0,
+                    spot, maturity, risk_free_rate,
+                    paths, steps, random_seed, full_path,
+                )
+                terminal = np.asarray(terminal)
+                price_paths = np.asarray(price_paths_raw) if full_path else None
+                vol_paths_out = np.asarray(vol_paths_raw) if full_path else None
+
+                self._logger.info(
+                    "END | simulate [C++] | terminal_mean=%.6f | terminal_std=%.6f",
+                    float(np.mean(terminal)),
+                    float(np.std(terminal)),
+                )
+                return SimulationResult(
+                    terminal_prices=terminal,
+                    full_price_paths=price_paths,
+                    volatility_paths=vol_paths_out,
+                )
+
+            # ── Python fallback ──
             rng = np.random.default_rng(random_seed)
             dt = maturity / steps
             sqrt_dt = np.sqrt(dt)

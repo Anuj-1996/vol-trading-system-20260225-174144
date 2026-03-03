@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from typing import Dict, List
@@ -51,9 +52,12 @@ class LiquidityWeightedObjective:
         rmse_by_expiry: Dict[date, float] = {}
         weighted_error_sum = 0.0
 
-        for expiry_index, expiry in enumerate(market_surface.expiry_list):
+        strikes = market_surface.strike_grid
+
+        def _compute_expiry(expiry_index: int):
+            """Compute model IV RMSE for a single expiry (thread-safe with C++ GIL release)."""
+            expiry = market_surface.expiry_list[expiry_index]
             maturity = float(market_surface.maturity_grid[expiry_index])
-            strikes = market_surface.strike_grid
             model_prices = self._pricer.price_calls_fft(
                 spot=spot,
                 maturity=maturity,
@@ -101,12 +105,23 @@ class LiquidityWeightedObjective:
                 )
 
             rmse = float(np.sqrt(np.mean((model_ivs - market_ivs) ** 2)))
-            rmse_by_expiry[expiry] = rmse
 
             expiry_weight = expiry_weights.get(expiry, 1.0)
             if maturity <= 30.0 / 365.0:
                 expiry_weight *= CONFIG.calibration.short_maturity_weight_multiplier
-            weighted_error_sum += expiry_weight * (rmse**2)
+
+            return expiry, rmse, expiry_weight
+
+        n_expiries = len(market_surface.expiry_list)
+        if n_expiries > 1:
+            with ThreadPoolExecutor(max_workers=min(n_expiries, 8)) as executor:
+                results = list(executor.map(_compute_expiry, range(n_expiries)))
+        else:
+            results = [_compute_expiry(0)] if n_expiries == 1 else []
+
+        for expiry, rmse, expiry_weight in results:
+            rmse_by_expiry[expiry] = rmse
+            weighted_error_sum += expiry_weight * (rmse ** 2)
 
         weighted_rmse = float(np.sqrt(weighted_error_sum / total_weight))
         feller_gap = 2.0 * params.kappa * params.theta - params.xi**2

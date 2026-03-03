@@ -807,8 +807,106 @@ static py::array_t<double> implied_vols_from_calls(
 // 7.  BATCH STRATEGY EVALUATOR  (evaluate N strategies in one C++ call)
 // ═══════════════════════════════════════════════════════════════════════
 
+// Helper: evaluate a single strategy (used by batch)
+struct StrategyInput {
+    std::vector<LegDef> legs;
+    double net_premium;
+    bool has_underlying;
+    double margin;
+};
+
+struct StrategyResult {
+    std::vector<double> pnl;
+    double ev, var95, var99, es, prob_loss, max_loss;
+    double skew, kurt, convexity, rom;
+};
+
+static StrategyResult eval_one_strategy(
+    const double* tp, int n, const StrategyInput& si, double spot
+) {
+    StrategyResult r;
+    r.pnl.resize(n);
+
+    for (int i = 0; i < n; ++i) {
+        double s = tp[i];
+        double payoff = 0.0;
+        for (const auto& leg : si.legs) {
+            double intr = (leg.option_type == 0)
+                ? std::max(s - leg.strike, 0.0)
+                : std::max(leg.strike - s, 0.0);
+            payoff += leg.direction * leg.ratio * intr;
+        }
+        r.pnl[i] = payoff - si.net_premium;
+        if (si.has_underlying) r.pnl[i] += (s - spot);
+    }
+
+    double sum = 0.0;
+    int loss_count = 0;
+    double min_pnl = r.pnl[0];
+    for (int i = 0; i < n; ++i) {
+        sum += r.pnl[i];
+        if (r.pnl[i] < 0.0) ++loss_count;
+        if (r.pnl[i] < min_pnl) min_pnl = r.pnl[i];
+    }
+    r.ev = sum / n;
+    r.prob_loss = (double)loss_count / n;
+    r.max_loss = std::max(0.0, -min_pnl);
+
+    double var_sum = 0.0;
+    for (int i = 0; i < n; ++i) {
+        double d = r.pnl[i] - r.ev;
+        var_sum += d * d;
+    }
+    double std_dev = std::sqrt(var_sum / n);
+
+    r.skew = 0.0; r.kurt = 0.0;
+    if (std_dev > 1e-12) {
+        double skew_sum = 0.0, kurt_sum = 0.0;
+        for (int i = 0; i < n; ++i) {
+            double z = (r.pnl[i] - r.ev) / std_dev;
+            double z2 = z * z;
+            skew_sum += z2 * z;
+            kurt_sum += z2 * z2;
+        }
+        r.skew = skew_sum / n;
+        r.kurt = kurt_sum / n;
+    }
+
+    // Use partial sort for percentiles (much faster than full sort for large n)
+    // We need the 1st and 5th percentile
+    std::vector<double> sorted_pnl(r.pnl);
+    std::sort(sorted_pnl.begin(), sorted_pnl.end());
+    auto pctl = [&](double q) -> double {
+        double idx = q * (n - 1);
+        int lo = (int)idx;
+        int hi = std::min(lo + 1, n - 1);
+        double frac = idx - lo;
+        return sorted_pnl[lo] * (1.0 - frac) + sorted_pnl[hi] * frac;
+    };
+    r.var95 = std::max(0.0, -pctl(0.05));
+    r.var99 = std::max(0.0, -pctl(0.01));
+    double p1 = pctl(0.01);
+    double tail_sum = 0.0; int tail_count = 0;
+    for (int i = 0; i < n; ++i) {
+        if (r.pnl[i] <= p1) { tail_sum += r.pnl[i]; ++tail_count; }
+    }
+    r.es = (tail_count > 0) ? std::max(0.0, -(tail_sum / tail_count)) : r.var99;
+
+    r.convexity = 0.0;
+    for (int i = 1; i < n - 1; ++i) {
+        double d2 = sorted_pnl[i+1] - 2.0*sorted_pnl[i] + sorted_pnl[i-1];
+        r.convexity += std::abs(d2);
+    }
+    r.convexity = (n > 2) ? r.convexity / (n - 2) : 0.0;
+
+    double cost = (si.net_premium > 0) ? std::abs(si.net_premium) : std::max(si.margin, std::abs(si.net_premium) + 1.0);
+    r.rom = r.ev / std::max(cost, 1e-8);
+
+    return r;
+}
+
 // Evaluate multiple strategies against the same terminal prices
-// This avoids N Python→C++ round-trips
+// Multi-threaded: strategies are distributed across hardware threads
 static py::list batch_evaluate_strategies(
     py::array_t<double, py::array::c_style> terminal_prices,
     py::list strategy_list,   // list of dicts: {legs, net_premium, has_underlying, spot, margin}
@@ -816,18 +914,17 @@ static py::list batch_evaluate_strategies(
 ) {
     auto tp = terminal_prices.unchecked<1>();
     int n = (int)tp.shape(0);
+    const double* tp_ptr = tp.data(0);
 
-    py::list results;
-
-    for (auto item : strategy_list) {
-        auto sd = item.cast<py::dict>();
+    // Parse all strategies from Python (must be done under GIL)
+    int ns = (int)py::len(strategy_list);
+    std::vector<StrategyInput> inputs(ns);
+    for (int si_idx = 0; si_idx < ns; ++si_idx) {
+        auto sd = strategy_list[si_idx].cast<py::dict>();
         auto py_legs = sd["legs"].cast<py::list>();
-        double net_premium = sd["net_premium"].cast<double>();
-        bool has_underlying = sd["has_underlying"].cast<bool>();
-        double margin = sd["margin"].cast<double>();
-
-        // Parse legs
-        std::vector<LegDef> legs;
+        inputs[si_idx].net_premium    = sd["net_premium"].cast<double>();
+        inputs[si_idx].has_underlying = sd["has_underlying"].cast<bool>();
+        inputs[si_idx].margin         = sd["margin"].cast<double>();
         for (auto leg_item : py_legs) {
             auto ld = leg_item.cast<py::dict>();
             LegDef leg;
@@ -835,102 +932,48 @@ static py::list batch_evaluate_strategies(
             leg.option_type  = (ld["option_type"].cast<std::string>() == "C") ? 0 : 1;
             leg.direction    = ld["direction"].cast<int>();
             leg.ratio        = ld["ratio"].cast<int>();
-            legs.push_back(leg);
+            inputs[si_idx].legs.push_back(leg);
         }
+    }
 
-        // Compute PnL
-        std::vector<double> pnl(n);
-        for (int i = 0; i < n; ++i) {
-            double s = tp(i);
-            double payoff = 0.0;
-            for (const auto& leg : legs) {
-                double intr = (leg.option_type == 0)
-                    ? std::max(s - leg.strike, 0.0)
-                    : std::max(leg.strike - s, 0.0);
-                payoff += leg.direction * leg.ratio * intr;
+    // Evaluate all strategies in parallel (release GIL)
+    std::vector<StrategyResult> all_results(ns);
+    {
+        py::gil_scoped_release release;
+        int n_threads = std::min((int)std::thread::hardware_concurrency(), std::max(1, ns));
+        if (n_threads > 16) n_threads = 16;
+        std::vector<std::thread> threads(n_threads);
+
+        auto worker = [&](int tid) {
+            for (int i = tid; i < ns; i += n_threads) {
+                all_results[i] = eval_one_strategy(tp_ptr, n, inputs[i], spot);
             }
-            pnl[i] = payoff - net_premium;
-            if (has_underlying) pnl[i] += (s - spot);
-        }
-
-        // Stats
-        double sum = 0.0;
-        int loss_count = 0;
-        double min_pnl = pnl[0];
-        for (int i = 0; i < n; ++i) {
-            sum += pnl[i];
-            if (pnl[i] < 0.0) ++loss_count;
-            if (pnl[i] < min_pnl) min_pnl = pnl[i];
-        }
-        double ev = sum / n;
-        double prob_loss = (double)loss_count / n;
-        double max_loss = std::max(0.0, -min_pnl);
-
-        double var_sum = 0.0;
-        for (int i = 0; i < n; ++i) {
-            double d = pnl[i] - ev;
-            var_sum += d * d;
-        }
-        double std_dev = std::sqrt(var_sum / n);
-
-        double skew = 0.0, kurt = 0.0;
-        if (std_dev > 1e-12) {
-            double skew_sum = 0.0, kurt_sum = 0.0;
-            for (int i = 0; i < n; ++i) {
-                double z = (pnl[i] - ev) / std_dev;
-                double z2 = z * z;
-                skew_sum += z2 * z;
-                kurt_sum += z2 * z2;
-            }
-            skew = skew_sum / n;
-            kurt = kurt_sum / n;
-        }
-
-        // Percentiles
-        std::vector<double> sorted_pnl(pnl);
-        std::sort(sorted_pnl.begin(), sorted_pnl.end());
-        auto pctl = [&](double q) -> double {
-            double idx = q * (n - 1);
-            int lo = (int)idx;
-            int hi = std::min(lo + 1, n - 1);
-            double frac = idx - lo;
-            return sorted_pnl[lo] * (1.0 - frac) + sorted_pnl[hi] * frac;
         };
-        double var95 = std::max(0.0, -pctl(0.05));
-        double var99 = std::max(0.0, -pctl(0.01));
-        double p1 = pctl(0.01);
-        double tail_sum = 0.0; int tail_count = 0;
-        for (int i = 0; i < n; ++i) {
-            if (pnl[i] <= p1) { tail_sum += pnl[i]; ++tail_count; }
-        }
-        double es = (tail_count > 0) ? std::max(0.0, -(tail_sum / tail_count)) : var99;
+        for (int t = 0; t < n_threads; ++t)
+            threads[t] = std::thread(worker, t);
+        for (int t = 0; t < n_threads; ++t)
+            threads[t].join();
+    }
 
-        double convexity = 0.0;
-        for (int i = 1; i < n - 1; ++i) {
-            double d2 = sorted_pnl[i+1] - 2.0*sorted_pnl[i] + sorted_pnl[i-1];
-            convexity += std::abs(d2);
-        }
-        convexity = (n > 2) ? convexity / (n - 2) : 0.0;
-
-        double cost = (net_premium > 0) ? std::abs(net_premium) : std::max(margin, std::abs(net_premium) + 1.0);
-        double rom = ev / std::max(cost, 1e-8);
-
-        // PnL array
+    // Convert results to Python dicts (under GIL)
+    py::list results;
+    for (int i = 0; i < ns; ++i) {
+        const auto& r = all_results[i];
         auto pnl_arr = py::array_t<double>({(py::ssize_t)n});
-        std::memcpy(pnl_arr.mutable_data(), pnl.data(), sizeof(double) * n);
+        std::memcpy(pnl_arr.mutable_data(), r.pnl.data(), sizeof(double) * n);
 
         py::dict rd;
         rd["pnl"]               = pnl_arr;
-        rd["expected_value"]     = ev;
-        rd["var_95"]             = var95;
-        rd["var_99"]             = var99;
-        rd["expected_shortfall"] = es;
-        rd["probability_of_loss"] = prob_loss;
-        rd["max_loss"]           = max_loss;
-        rd["pnl_skewness"]      = skew;
-        rd["pnl_kurtosis"]      = kurt;
-        rd["convexity"]          = convexity;
-        rd["return_on_margin"]   = rom;
+        rd["expected_value"]     = r.ev;
+        rd["var_95"]             = r.var95;
+        rd["var_99"]             = r.var99;
+        rd["expected_shortfall"] = r.es;
+        rd["probability_of_loss"] = r.prob_loss;
+        rd["max_loss"]           = r.max_loss;
+        rd["pnl_skewness"]      = r.skew;
+        rd["pnl_kurtosis"]      = r.kurt;
+        rd["convexity"]          = r.convexity;
+        rd["return_on_margin"]   = r.rom;
 
         results.append(rd);
     }

@@ -1,0 +1,12 @@
+2026-03-03 11:58:38,419 | INFO | backend.simulation.heston_mc | START | function=HestonMonteCarloEngine.simulate
+2026-03-03 11:58:38,419 | INFO | HestonMonteCarloEngine | START | simulate | paths=50000 | steps=96 | maturity=0.020000 | full_path=False | seed=42
+2026-03-03 11:58:38,528 | INFO | HestonMonteCarloEngine | END | simulate | terminal_mean=21950.899540 | terminal_std=620.109043
+2026-03-03 11:58:38,528 | INFO | backend.simulation.heston_mc | END | function=HestonMonteCarloEngine.simulate | elapsed_seconds=0.109367
+2026-03-03 11:58:38,528 | INFO | backend.simulation.heston_mc | START | function=HestonMonteCarloEngine.simulate
+2026-03-03 11:58:38,528 | INFO | HestonMonteCarloEngine | START | simulate | paths=50000 | steps=96 | maturity=0.020000 | full_path=False | seed=42
+2026-03-03 11:58:38,634 | INFO | HestonMonteCarloEngine | END | simulate | terminal_mean=21950.899540 | terminal_std=620.109043
+2026-03-03 11:58:38,634 | INFO | backend.simulation.heston_mc | END | function=HestonMonteCarloEngine.simulate | elapsed_seconds=0.105492
+2026-03-03 11:58:38,634 | INFO | backend.simulation.heston_mc | START | function=HestonMonteCarloEngine.simulate
+2026-03-03 11:58:38,634 | INFO | HestonMonteCarloEngine | START | simulate | paths=50000 | steps=96 | maturity=0.020000 | full_path=False | seed=42
+2026-03-03 11:58:38,742 | INFO | HestonMonteCarloEngine | END | simulate | terminal_mean=21950.899540 | terminal_std=620.109043
+2026-03-03 11:58:38,742 | INFO | backend.simulation.heston_mc | END | function=HestonMonteCarloEngine.simulate | elapsed_seconds=0.108037

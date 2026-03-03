@@ -10,6 +10,12 @@ from ..decorators import log_execution_time
 from ..logger import get_logger
 from ..strategy.base_strategy import Leg, StrategyObject
 
+try:
+    from ..cpp import vol_core, HAS_CPP
+except Exception:
+    vol_core = None  # type: ignore
+    HAS_CPP = False
+
 
 # ── Black-Scholes helpers ─────────────────────────────────────────────
 
@@ -212,6 +218,87 @@ class StaticEvaluationEngine:
         results: List[StrategyMetrics] = []
         pnl_distributions: Dict[str, np.ndarray] = {}
 
+        # ── Build IV map for C++ Greeks/premium (strike_type -> sigma) ──
+        iv_cache: Dict[str, float] = {}
+
+        def _get_iv(strike: float, otype: str) -> float:
+            key = f"{int(strike)}_{otype}"
+            if key not in iv_cache:
+                iv_cache[key] = iv_lookup(strike, otype)
+            return iv_cache[key]
+
+        # ── C++ batch fast path ──
+        if HAS_CPP and vol_core is not None and len(strategies) > 0:
+            tp_arr = np.ascontiguousarray(terminal_prices, dtype=np.float64)
+
+            # Pre-compute IV cache and build batch input
+            strategy_batch = []
+            valid_strategies = []
+            for strategy in strategies:
+                legs = strategy.legs
+                if not legs:
+                    continue
+
+                leg_dicts = []
+                for leg in legs:
+                    _get_iv(leg.strike, leg.option_type)
+                    leg_dicts.append({
+                        "strike": leg.strike,
+                        "option_type": leg.option_type,
+                        "direction": leg.direction,
+                        "ratio": leg.ratio,
+                    })
+
+                has_underlying = strategy.strategy_type in ("Covered Call", "Protective Put", "Protective Collar")
+                net_premium = vol_core.compute_net_premium(leg_dicts, spot, T, r, iv_cache)
+
+                strategy_batch.append({
+                    "legs": leg_dicts,
+                    "net_premium": net_premium,
+                    "has_underlying": has_underlying,
+                    "margin": strategy.margin,
+                })
+                valid_strategies.append((strategy, leg_dicts, legs, net_premium))
+
+            # Single C++ call: multi-threaded batch evaluation across all strategies
+            batch_results = vol_core.batch_evaluate_strategies(tp_arr, strategy_batch, spot)
+
+            for idx, (strategy, leg_dicts, legs, net_premium) in enumerate(valid_strategies):
+                cpp_result = batch_results[idx]
+                pnl = np.asarray(cpp_result["pnl"])
+
+                # C++ Greeks
+                greeks = vol_core.compute_greeks(leg_dicts, spot, T, r, iv_cache)
+
+                metrics = StrategyMetrics(
+                    strategy_type=strategy.strategy_type,
+                    strikes=strategy.strikes,
+                    legs_label=self._legs_label(legs),
+                    net_premium=net_premium,
+                    expected_value=float(cpp_result["expected_value"]),
+                    var_95=float(cpp_result["var_95"]),
+                    var_99=float(cpp_result["var_99"]),
+                    expected_shortfall=float(cpp_result["expected_shortfall"]),
+                    probability_of_loss=float(cpp_result["probability_of_loss"]),
+                    return_on_margin=float(cpp_result["return_on_margin"]),
+                    pnl_skewness=float(cpp_result["pnl_skewness"]),
+                    pnl_kurtosis=float(cpp_result["pnl_kurtosis"]),
+                    max_loss=float(cpp_result["max_loss"]),
+                    convexity_exposure=float(cpp_result["convexity"]),
+                    delta_exposure=float(greeks["delta"]),
+                    gamma_exposure=float(greeks["gamma"]),
+                    vega_exposure=float(greeks["vega"]),
+                    theta_exposure=float(greeks["theta"]),
+                    skew_exposure=float(greeks["skew"]),
+                )
+                results.append(metrics)
+                key = f"{strategy.strategy_type}:{strategy.strikes}"
+                pnl_distributions[key] = pnl
+
+            self._logger.info("END | evaluate [C++ batch] | metrics_generated=%d", len(results))
+            return results, pnl_distributions
+
+        # ── Python fallback ──
         for strategy in strategies:
             legs = strategy.legs
             if not legs:

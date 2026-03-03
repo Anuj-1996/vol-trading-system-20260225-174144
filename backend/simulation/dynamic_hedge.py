@@ -8,6 +8,12 @@ import numpy as np
 from ..decorators import log_execution_time
 from ..logger import get_logger
 
+try:
+    from ..cpp import vol_core, HAS_CPP
+except Exception:
+    vol_core = None  # type: ignore
+    HAS_CPP = False
+
 
 class HedgeMode(str, Enum):
     NO_HEDGE = "no_hedge"
@@ -44,6 +50,18 @@ class DynamicHedgingEngine:
             hedge_mode.value,
             full_price_paths.shape,
         )
+
+        # ── C++ fast path ──
+        if HAS_CPP and vol_core is not None:
+            mode_int = {HedgeMode.NO_HEDGE: 0, HedgeMode.DAILY_DELTA: 1, HedgeMode.THRESHOLD: 2}[hedge_mode]
+            result = vol_core.dynamic_hedge(
+                np.ascontiguousarray(full_price_paths, dtype=np.float64),
+                strike, premium, mode_int, transaction_cost_rate, delta_threshold,
+            )
+            pnl = np.asarray(result["pnl"])
+            avg_adj = float(result["average_adjustments"])
+            self._logger.info("END | dynamic_hedge [C++] | mean_pnl=%.6f | avg_adj=%.3f", float(np.mean(pnl)), avg_adj)
+            return DynamicPnLDistribution(pnl=pnl, average_adjustments=avg_adj)
 
         steps_plus_one, path_count = full_price_paths.shape
         steps = steps_plus_one - 1

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -584,11 +585,20 @@ class StrategyEngineService:
         raise FileNotFoundError(f"Input file not found: {file_path}")
 
     def _generate_strategies(self, constraints: StrategyConstraints, strike_set: List[float]) -> List[StrategyObject]:
-        strategies: List[StrategyObject] = []
-        for key in self._strategy_factory.supported():
+        supported = self._strategy_factory.supported()
+
+        def _gen_one(key: str) -> List[StrategyObject]:
             strategy = self._strategy_factory.create(key, constraints=constraints)
-            generated = strategy.generate_valid_combinations(strike_set=strike_set)
-            strategies.extend(generated)
+            return strategy.generate_valid_combinations(strike_set=strike_set)
+
+        strategies: List[StrategyObject] = []
+        if len(supported) > 1:
+            with ThreadPoolExecutor(max_workers=min(len(supported), 8)) as pool:
+                for batch in pool.map(_gen_one, supported):
+                    strategies.extend(batch)
+        else:
+            for key in supported:
+                strategies.extend(_gen_one(key))
         return strategies
 
     def _select_candidate_strikes(self, strikes: List[float], spot: float) -> List[float]:
@@ -616,10 +626,12 @@ class StrategyEngineService:
         params: Any,
     ) -> np.ndarray:
         model_matrix = np.zeros((maturity_grid.size, strike_grid.size), dtype=float)
-        for maturity_index, maturity in enumerate(maturity_grid):
+
+        def _compute_row(maturity_index: int) -> tuple:
+            maturity = float(maturity_grid[maturity_index])
             prices = self._pricer.price_calls_fft(
                 spot=spot,
-                maturity=float(maturity),
+                maturity=maturity,
                 rate=rate,
                 dividend_yield=dividend_yield,
                 params=params,
@@ -629,16 +641,15 @@ class StrategyEngineService:
                 call_prices=prices,
                 spot=spot,
                 strikes=strike_grid,
-                maturity=float(maturity),
+                maturity=maturity,
                 rate=rate,
                 dividend_yield=dividend_yield,
             )
-            model_matrix[maturity_index, :] = model_ivs
 
             sample_count = min(5, strike_grid.size)
             self._logger.info(
                 "SURFACE_TRACE | maturity=%.6f | prices_first5=%s | ivs_first5=%s",
-                float(maturity),
+                maturity,
                 np.array2string(prices[:sample_count], precision=6, separator=", "),
                 np.array2string(model_ivs[:sample_count], precision=6, separator=", "),
             )
@@ -647,10 +658,21 @@ class StrategyEngineService:
             if iv_span < 1e-4:
                 self._logger.warning(
                     "SURFACE_IV_NEARLY_IDENTICAL | maturity=%.6f | iv_span=%.8f | params=%s",
-                    float(maturity),
+                    maturity,
                     iv_span,
                     params,
                 )
+            return maturity_index, model_ivs
+
+        n_mat = maturity_grid.size
+        if n_mat > 1:
+            with ThreadPoolExecutor(max_workers=min(n_mat, 8)) as pool:
+                for idx, ivs in pool.map(_compute_row, range(n_mat)):
+                    model_matrix[idx, :] = ivs
+        else:
+            for i in range(n_mat):
+                idx, ivs = _compute_row(i)
+                model_matrix[idx, :] = ivs
 
         if model_matrix.ndim != 2:
             raise ValueError(f"Model IV surface must be 2D, got shape {model_matrix.shape}")

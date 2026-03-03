@@ -22,3 +22,4 @@ data/*.db
 # OS / editor
 .vscode/
 .idea/
+backlog.log

@@ -3,8 +3,11 @@ import {
   checkBackendHealth,
   getRecentLogs,
   getSnapshotModule,
+  normalizeSnapshotModules,
   runLiveForSnapshot,
+  aiSyncPipeline,
 } from './api/client';
+import AICopilotPanel from './components/AICopilotPanel';
 import BacktestPage from './components/pages/BacktestPage';
 import MarketPage from './components/pages/MarketPage';
 import PortfolioPage from './components/pages/PortfolioPage';
@@ -52,6 +55,8 @@ export default function App() {
   const [scoreWeights, setScoreWeights] = useState('EV:0.30, VaR:0.25, ES:0.20, RoM:0.15, Fragility:0.10');
   const [liveMetadata, setLiveMetadata] = useState(null);
   const [fetchProgress, setFetchProgress] = useState('');
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [lastPipelineData, setLastPipelineData] = useState(null);
 
   const {
     activeSnapshotId,
@@ -167,6 +172,16 @@ export default function App() {
           ...fallbackModules,
           selectedStrategyId: fallbackModules.strategies?.items?.[0]?.id || null,
         });
+        // Sync pipeline data to AI agents
+        const pipelinePayload = {
+          market_overview: fallbackModules.market || null,
+          surface: fallbackModules.surface || null,
+          calibration: fallbackModules.surface?.calibration || null,
+          regime: fallbackModules.market?.regime || null,
+          top_strategies: fallbackModules.strategies?.items || [],
+        };
+        setLastPipelineData(pipelinePayload);
+        aiSyncPipeline(pipelinePayload).catch(() => {});
       }
       await loadSnapshotModules(snapshotId);
       setFetchProgress('');
@@ -350,6 +365,7 @@ export default function App() {
           selectedStrategyId={selectedStrategyId}
           risk={risk}
           market={market}
+          surface={surface}
         />
       );
     }
@@ -366,7 +382,7 @@ export default function App() {
   };
 
   return (
-    <div className="bbg-shell">
+    <div className={`bbg-shell${aiPanelOpen ? ' ai-open' : ''}`}>
       <aside className="bbg-sidebar">
         <div className="brand">VOL TRADING</div>
         <nav>
@@ -446,6 +462,36 @@ export default function App() {
           <div><span>Snapshot</span><strong>{activeSnapshotId || '-'}</strong></div>
         </footer>
       </div>
+
+      <AICopilotPanel
+        pipelineData={lastPipelineData}
+        isOpen={aiPanelOpen}
+        onToggle={() => setAiPanelOpen((prev) => !prev)}
+        dataId={liveMetadata?.data_id || null}
+        onRecalibrated={(recalData) => {
+          // Update pipeline data for AI agents
+          const updatedPayload = {
+            market_overview: recalData.market_overview || null,
+            surface: recalData.surface || null,
+            calibration: recalData.calibration || null,
+            regime: recalData.regime || null,
+            top_strategies: recalData.top_strategies || [],
+          };
+          setLastPipelineData(updatedPayload);
+
+          // Push recalibrated data into snapshot store so dashboard updates
+          const modules = normalizeSnapshotModules(recalData);
+          setSnapshotData({
+            market: modules.market,
+            surface: modules.surface,
+            strategies: modules.strategies,
+            risk: modules.risk,
+            backtest: modules.backtest,
+            portfolio: modules.portfolio,
+            selectedStrategyId: modules.strategies?.items?.[0]?.id || null,
+          });
+        }}
+      />
     </div>
   );
 }

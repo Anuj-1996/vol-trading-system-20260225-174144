@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from ..config import CONFIG
 from ..exceptions import CalibrationError, DataIngestionError, EngineError, SimulationError, StrategyError
@@ -12,6 +14,7 @@ from ..logger import get_logger
 from ..services.engine_service import LivePipelineRequest, PipelineRequest, StrategyEngineService
 from ..services.job_service import AsyncJobService
 from ..simulation.dynamic_hedge import HedgeMode
+from ..ai.orchestrator_agent import OrchestratorAgent
 
 
 class StaticPipelinePayload(BaseModel):
@@ -60,10 +63,50 @@ class LiveStaticPipelinePayload(BaseModel):
     simulation_steps: int = Field(default=64, ge=8)
 
 
+class AIChatPayload(BaseModel):
+    query: str = Field(description="User question or command for the AI agents")
+    agent: Optional[str] = Field(
+        default=None,
+        description="Force a specific agent: market_intel, strategy_advisor, risk_analyst, calibration_monitor, trade_execution, pre_trade, vol_surface",
+    )
+    pipeline_data: Optional[dict] = Field(
+        default=None,
+        description="Pipeline response to use as context (optional, uses last cached)",
+    )
+
+
+class AIBriefingPayload(BaseModel):
+    pipeline_data: Optional[dict] = Field(
+        default=None,
+        description="Pipeline response to generate briefing from",
+    )
+
+
+class RecalibratePayload(BaseModel):
+    data_id: str = Field(description="Cache key returned by /api/v1/data/fetch-live")
+    initial_guess: Optional[dict] = Field(
+        default=None,
+        description="Custom Heston initial guess: {kappa, theta, xi, rho, v0}",
+    )
+    param_bounds: Optional[dict] = Field(
+        default=None,
+        description="Custom bounds: {kappa: [lo, hi], theta: [lo, hi], ...}",
+    )
+    risk_free_rate: float = 0.065
+    dividend_yield: float = 0.012
+    capital_limit: float = Field(default=500000.0, gt=0.0)
+    strike_increment: int = Field(default=50, gt=0)
+    max_legs: int = Field(default=4, ge=1, le=6)
+    max_width: float = Field(default=1000.0, gt=0.0)
+    simulation_paths: int = Field(default=5000, ge=500)
+    simulation_steps: int = Field(default=32, ge=8)
+
+
 router = APIRouter()
 _logger = get_logger("APIRouter")
 _engine = StrategyEngineService()
 _jobs = AsyncJobService()
+_orchestrator = OrchestratorAgent()
 
 
 @router.get("/health")
@@ -211,3 +254,119 @@ def run_live_static_pipeline(payload: LiveStaticPipelinePayload) -> dict:
     except Exception as exc:
         _logger.exception("ERROR | run_live_static_pipeline")
         raise HTTPException(status_code=500, detail=f"Internal error: {exc}") from exc
+
+
+# ──────────────────────────────────────────────────────────────────────
+# AI Agent Endpoints
+# ──────────────────────────────────────────────────────────────────────
+
+
+@router.post("/ai/chat")
+def ai_chat(payload: AIChatPayload) -> dict:
+    """Send a query to the AI agent system. Auto-routes to the best agent."""
+    _logger.info("START | ai_chat | query=%s | agent=%s", payload.query[:80], payload.agent)
+    try:
+        result = _orchestrator.chat(
+            query=payload.query,
+            agent_name=payload.agent,
+            pipeline_data=payload.pipeline_data,
+        )
+        _logger.info("END | ai_chat | agent=%s", result.get("agent"))
+        return {"status": "ok", "data": result}
+    except Exception as exc:
+        _logger.exception("ERROR | ai_chat")
+        raise HTTPException(status_code=500, detail=f"AI agent error: {exc}") from exc
+
+
+@router.post("/ai/chat/stream")
+def ai_chat_stream(payload: AIChatPayload):
+    """Streaming chat endpoint. Returns SSE stream of agent response chunks."""
+    _logger.info("START | ai_chat_stream | query=%s", payload.query[:80])
+
+    def event_stream():
+        try:
+            for chunk_data in _orchestrator.chat_streaming(
+                query=payload.query,
+                agent_name=payload.agent,
+                pipeline_data=payload.pipeline_data,
+            ):
+                yield f"data: {json.dumps(chunk_data)}\n\n"
+        except Exception as exc:
+            _logger.exception("ERROR | ai_chat_stream")
+            yield f"data: {json.dumps({'error': str(exc), 'done': True})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/ai/briefing")
+def ai_briefing(payload: AIBriefingPayload) -> dict:
+    """Generate a comprehensive market briefing from all agents."""
+    _logger.info("START | ai_briefing")
+    try:
+        result = _orchestrator.generate_briefing(pipeline_data=payload.pipeline_data)
+        _logger.info("END | ai_briefing")
+        return {"status": "ok", "data": result}
+    except Exception as exc:
+        _logger.exception("ERROR | ai_briefing")
+        raise HTTPException(status_code=500, detail=f"AI briefing error: {exc}") from exc
+
+
+@router.get("/ai/agents")
+def ai_list_agents() -> dict:
+    """List all available AI agents and their roles."""
+    return {
+        "status": "ok",
+        "data": _orchestrator.get_available_agents(),
+    }
+
+
+@router.post("/ai/pipeline-sync")
+def ai_sync_pipeline(payload: dict) -> dict:
+    """Push pipeline data to the AI orchestrator for context."""
+    _logger.info("START | ai_pipeline_sync")
+    try:
+        _orchestrator.set_pipeline_data(payload)
+        return {"status": "ok", "message": "Pipeline data synced to AI agents."}
+    except Exception as exc:
+        _logger.exception("ERROR | ai_pipeline_sync")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/ai/recalibrate")
+def ai_recalibrate(payload: RecalibratePayload) -> dict:
+    """Re-run Heston calibration with custom initial guess / bounds on cached data."""
+    _logger.info(
+        "START | ai_recalibrate | data_id=%s | guess=%s",
+        payload.data_id, payload.initial_guess,
+    )
+    try:
+        result = _engine.recalibrate(
+            data_id=payload.data_id,
+            initial_guess=payload.initial_guess,
+            param_bounds=payload.param_bounds,
+            risk_free_rate=payload.risk_free_rate,
+            dividend_yield=payload.dividend_yield,
+            capital_limit=payload.capital_limit,
+            strike_increment=payload.strike_increment,
+            max_legs=payload.max_legs,
+            max_width=payload.max_width,
+            simulation_paths=payload.simulation_paths,
+            simulation_steps=payload.simulation_steps,
+        )
+        # Auto-sync updated pipeline data to AI agents
+        _orchestrator.set_pipeline_data(result)
+        _logger.info("END | ai_recalibrate | rmse=%.6f", result["calibration"]["weighted_rmse"])
+        return {"status": "ok", "data": result}
+    except (CalibrationError, ValueError) as exc:
+        _logger.exception("ERROR | ai_recalibrate")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _logger.exception("ERROR | ai_recalibrate")
+        raise HTTPException(status_code=500, detail=f"Recalibration error: {exc}") from exc
+
+
+@router.post("/ai/clear")
+def ai_clear_conversation() -> dict:
+    """Clear AI conversation history for a fresh session."""
+    _orchestrator.clear_conversation()
+    return {"status": "ok", "message": "Conversation cleared."}

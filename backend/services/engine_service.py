@@ -24,7 +24,7 @@ from ..logger import get_logger
 from ..regime.regime_classifier import RegimeClassifier
 from ..simulation.dynamic_hedge import DynamicHedgingEngine, HedgeMode
 from ..simulation.heston_mc import HestonMonteCarloEngine
-from ..strategy.base_strategy import StrategyConstraints, StrategyObject
+from ..strategy.base_strategy import StrategyConstraints, StrategyObject, build_legs
 from ..strategy.strategy_factory import StrategyFactory
 from ..surface.builder import SurfaceBuilder
 from ..surface.liquidity_filter import LiquidityFilterEngine
@@ -401,6 +401,10 @@ class StrategyEngineService:
                         np.array([], dtype=float),
                     )[:1200].tolist(),
                     "fragility_score": item.fragility_score,
+                    "legs": [
+                        {"strike": leg.strike, "option_type": leg.option_type, "direction": leg.direction, "ratio": leg.ratio}
+                        for leg in build_legs(item.metrics.strategy_type, item.metrics.strikes)
+                    ],
                 }
                 for item in ranked
             ],
@@ -916,11 +920,314 @@ class StrategyEngineService:
                         np.array([], dtype=float),
                     )[:1200].tolist(),
                     "fragility_score": item.fragility_score,
+                    "legs": [
+                        {"strike": leg.strike, "option_type": leg.option_type, "direction": leg.direction, "ratio": leg.ratio}
+                        for leg in build_legs(item.metrics.strategy_type, item.metrics.strikes)
+                    ],
                 }
                 for item in ranked
             ],
         }
         self._logger.info("END | run_static_pipeline")
+        return response
+
+    def recalibrate(
+        self,
+        data_id: Optional[str] = None,
+        initial_guess: Optional[Dict[str, float]] = None,
+        param_bounds: Optional[Dict[str, list]] = None,
+        risk_free_rate: float = 0.065,
+        dividend_yield: float = 0.012,
+        capital_limit: float = 500000,
+        strike_increment: int = 50,
+        max_legs: int = 4,
+        max_width: float = 1000,
+        simulation_paths: int = 5000,
+        simulation_steps: int = 32,
+    ) -> Dict[str, Any]:
+        """
+        Re-run ONLY calibration (and downstream simulation/evaluation/ranking)
+        on the same cached market data, with user-specified initial guess or bounds.
+
+        This is the engine behind the AI Calibration Monitor's "Re-Calibrate" action.
+        """
+        self._logger.info(
+            "START | recalibrate | data_id=%s | initial_guess=%s | bounds=%s",
+            data_id, initial_guess, param_bounds,
+        )
+
+        # Resolve market data from cache
+        if data_id:
+            cached = self.get_cached_nse_data(data_id)
+            if cached is None:
+                raise ValueError(f"No cached NSE data for data_id={data_id}. Run pipeline first.")
+            raw_records = cached["cleaned_records"]
+            spot = cached["spot"]
+            symbol = cached.get("symbol", "NIFTY")
+        else:
+            raise ValueError("data_id is required for recalibration.")
+
+        if not raw_records:
+            raise ValueError("Cached NSE data contains no records.")
+
+        # Rebuild surface from cached records
+        filtered = self._liquidity_filter.filter_records(records=raw_records, spot=spot)
+        surface = self._surface_builder.build_surface(records=filtered)
+
+        # Build initial guess tuple (kappa, theta, xi, rho, v0)
+        ig = initial_guess or {}
+        guess_tuple = (
+            ig.get("kappa", 1.5),
+            ig.get("theta", 0.04),
+            ig.get("xi", 0.4),
+            ig.get("rho", -0.6),
+            ig.get("v0", 0.04),
+        )
+
+        # Override bounds if provided, otherwise auto-tighten around initial guess
+        default_bounds = CONFIG.calibration.param_bounds
+        if param_bounds:
+            bounds_list = list(default_bounds)
+            param_order = ["kappa", "theta", "xi", "rho", "v0"]
+            for i, name in enumerate(param_order):
+                if name in param_bounds:
+                    bounds_list[i] = tuple(param_bounds[name])
+            custom_bounds = tuple(bounds_list)
+        elif initial_guess:
+            # Auto-derive tighter bounds around the initial guess so the
+            # L-BFGS-B optimizer cannot escape to unrealistic boundary extremes.
+            auto_bounds = []
+            param_configs = [
+                # (name, guess_val, default_bound, lo_factor, hi_factor, abs_floor)
+                ("kappa", guess_tuple[0], default_bounds[0], 0.20, 3.0, 0.3),
+                ("theta", guess_tuple[1], default_bounds[1], 0.25, 3.0, 0.005),
+                ("xi",    guess_tuple[2], default_bounds[2], 0.25, 3.0, 0.05),
+                ("rho",   guess_tuple[3], default_bounds[3], None, None, None),  # special
+                ("v0",    guess_tuple[4], default_bounds[4], 0.25, 3.0, 0.005),
+            ]
+            for name, gv, (d_lo, d_hi), lo_f, hi_f, floor in param_configs:
+                if name == "rho":
+                    # rho is negative: tighten to [guess-0.25, min(guess+0.25, 0.0)]
+                    r_lo = max(d_lo, gv - 0.25)
+                    r_hi = min(d_hi, gv + 0.25)
+                    auto_bounds.append((r_lo, r_hi))
+                else:
+                    a_lo = max(d_lo, max(floor, gv * lo_f))
+                    a_hi = min(d_hi, gv * hi_f)
+                    if a_lo >= a_hi:
+                        a_lo, a_hi = d_lo, d_hi
+                    auto_bounds.append((a_lo, a_hi))
+            custom_bounds = tuple(auto_bounds)
+            self._logger.info(
+                "RECALIBRATE | auto-tightened bounds: %s", custom_bounds,
+            )
+        else:
+            custom_bounds = default_bounds
+
+        # Temporarily override bounds in config for the calibrator
+        original_bounds = CONFIG.calibration.param_bounds
+        try:
+            # Use object.__setattr__ since CalibrationConfig is frozen
+            object.__setattr__(CONFIG.calibration, 'param_bounds', custom_bounds)
+
+            calibration_result = self._calibrator.calibrate(
+                market_surface=surface,
+                filtered_records=filtered,
+                spot=spot,
+                rate=risk_free_rate,
+                dividend_yield=dividend_yield,
+                initial_guess=guess_tuple,
+            )
+        finally:
+            object.__setattr__(CONFIG.calibration, 'param_bounds', original_bounds)
+
+        # Run downstream: simulation → strategies → evaluation → ranking
+        maturity = float(np.max(surface.maturity_grid))
+        simulation_result = self._monte_carlo.simulate(
+            params=calibration_result.parameters,
+            spot=spot,
+            maturity=maturity,
+            risk_free_rate=risk_free_rate,
+            path_count=simulation_paths,
+            time_steps=simulation_steps,
+            full_path=False,
+        )
+
+        constraints = StrategyConstraints(
+            capital_limit=capital_limit,
+            strike_increment=strike_increment,
+            max_legs=max_legs,
+            max_width=max_width,
+            max_combinations_per_strategy=CONFIG.strategy.max_combinations_per_strategy,
+        )
+        strike_set = self._select_candidate_strikes(
+            strikes=sorted({item.strike for item in filtered}),
+            spot=spot,
+        )
+        strategies = self._generate_strategies(constraints=constraints, strike_set=strike_set)
+
+        near_T = float(np.min(surface.maturity_grid))
+        model_iv_for_pricing = self._build_model_surface_matrix(
+            spot=spot,
+            rate=risk_free_rate,
+            dividend_yield=dividend_yield,
+            maturity_grid=surface.maturity_grid,
+            strike_grid=surface.strike_grid,
+            params=calibration_result.parameters,
+        )
+        _near_idx = int(np.argmin(surface.maturity_grid))
+        _strike_arr = surface.strike_grid
+        _iv_row = model_iv_for_pricing[_near_idx]
+
+        def iv_lookup(strike: float, option_type: str) -> float:
+            idx = int(np.argmin(np.abs(_strike_arr - strike)))
+            return max(float(_iv_row[idx]), 0.01)
+
+        metrics, pnl_distributions = self._static_eval.evaluate(
+            strategies=strategies,
+            terminal_prices=simulation_result.terminal_prices,
+            spot=spot,
+            T=near_T,
+            r=risk_free_rate,
+            iv_lookup=iv_lookup,
+        )
+
+        fragility_scores: Dict[str, float] = {}
+        for metric in metrics:
+            key = f"{metric.strategy_type}:{metric.strikes}"
+            fragility_input = pnl_distributions.get(key, np.array([], dtype=float))
+            fragility_scores[key] = self._fragility.compute_fragility(fragility_input)
+
+        returns_proxy = np.diff(np.log(np.sort(simulation_result.terminal_prices)))
+        regime = self._regime.classify(returns_proxy)
+        ranked = self._ranking.rank(
+            metrics=metrics,
+            fragility_scores=fragility_scores,
+            regime_weights=regime.ranking_weights,
+        )
+
+        model_iv_matrix = model_iv_for_pricing
+        residual_iv_matrix = model_iv_matrix - surface.implied_vol_matrix
+        oi_profile = self._build_open_interest_profile(
+            filtered_records=filtered,
+            expiry_list=surface.expiry_list,
+            strike_grid=surface.strike_grid,
+        )
+
+        atm_index = int(np.argmin(np.abs(surface.strike_grid - spot)))
+        maturity_order = np.argsort(surface.maturity_grid)
+        atm_market_iv = 0.0
+        chosen_near_index = int(maturity_order[0])
+        for mi in maturity_order:
+            iv_val = float(surface.implied_vol_matrix[int(mi), atm_index])
+            if iv_val > 1e-6:
+                atm_market_iv = iv_val
+                chosen_near_index = int(mi)
+                break
+        atm_model_iv = float(model_iv_matrix[chosen_near_index, atm_index])
+        if atm_market_iv < 1e-6:
+            atm_market_iv = atm_model_iv
+
+        num_strikes = len(surface.strike_grid)
+        otm_put_idx = max(0, atm_index - max(1, num_strikes // 8))
+        otm_call_idx = min(num_strikes - 1, atm_index + max(1, num_strikes // 8))
+        put_wing_iv = float(surface.implied_vol_matrix[chosen_near_index, otm_put_idx])
+        call_wing_iv = float(surface.implied_vol_matrix[chosen_near_index, otm_call_idx])
+        skew_slope = put_wing_iv - call_wing_iv
+
+        history_metrics = self._fetch_market_history_metrics(symbol, atm_market_iv)
+        rv_reference = history_metrics["rv_20d"] if history_metrics["rv_20d"] is not None else atm_model_iv
+        realized_implied_spread = float(atm_market_iv - rv_reference)
+        strategy_margin_lookup = {
+            (strategy.strategy_type, strategy.strikes): float(strategy.margin)
+            for strategy in strategies
+        }
+
+        response = {
+            "recalibrated": True,
+            "initial_guess_used": {"kappa": guess_tuple[0], "theta": guess_tuple[1], "xi": guess_tuple[2], "rho": guess_tuple[3], "v0": guess_tuple[4]},
+            "bounds_used": {name: list(custom_bounds[i]) for i, name in enumerate(["kappa", "theta", "xi", "rho", "v0"])},
+            "market_overview": {
+                "spot": spot,
+                "atm_market_iv": atm_market_iv,
+                "atm_model_iv": atm_model_iv,
+                "realized_implied_spread": realized_implied_spread,
+                "ticker": history_metrics["ticker"],
+                "rv_10d": history_metrics["rv_10d"],
+                "rv_20d": history_metrics["rv_20d"],
+                "rv_60d": history_metrics["rv_60d"],
+                "rv_percentile": history_metrics["rv_percentile"],
+                "iv_rank": history_metrics["iv_rank"],
+                "iv_percentile": history_metrics["iv_percentile"],
+                "vvix_equivalent": history_metrics["vvix_equivalent"],
+                "data_source": "nse_live",
+            },
+            "surface": {
+                "strike_grid": surface.strike_grid.tolist(),
+                "maturity_grid": surface.maturity_grid.tolist(),
+                "market_iv_matrix": surface.implied_vol_matrix.tolist(),
+                "model_iv_matrix": model_iv_matrix.tolist(),
+                "residual_iv_matrix": residual_iv_matrix.tolist(),
+                "expiry_labels": oi_profile["expiry_labels"],
+                "open_interest_matrix": oi_profile["open_interest_matrix"],
+                "max_pain_by_expiry": oi_profile["max_pain_by_expiry"],
+            },
+            "calibration": {
+                "parameters": asdict(calibration_result.parameters),
+                "weighted_rmse": calibration_result.metrics.weighted_rmse,
+                "iterations": calibration_result.iterations,
+                "converged": calibration_result.converged,
+            },
+            "regime": {
+                "label": regime.label,
+                "confidence": regime.confidence,
+                "volatility_regime_score": round(atm_market_iv / max(rv_reference, 1e-8), 4),
+                "skew_regime_score": round(skew_slope, 6),
+            },
+            "top_strategies": [
+                {
+                    "strategy_type": item.metrics.strategy_type,
+                    "strikes": item.metrics.strikes,
+                    "legs_label": item.metrics.legs_label,
+                    "net_premium": item.metrics.net_premium,
+                    "overall_score": item.overall_score,
+                    "cost": abs(item.metrics.net_premium),
+                    "margin_required": max(
+                        abs(item.metrics.net_premium),
+                        strategy_margin_lookup.get((item.metrics.strategy_type, item.metrics.strikes), 0.0),
+                    ),
+                    "expected_value": item.metrics.expected_value,
+                    "var_95": item.metrics.var_95,
+                    "var_99": item.metrics.var_99,
+                    "expected_shortfall": item.metrics.expected_shortfall,
+                    "return_on_margin": item.metrics.return_on_margin,
+                    "probability_of_loss": item.metrics.probability_of_loss,
+                    "pnl_kurtosis": item.metrics.pnl_kurtosis,
+                    "max_loss": item.metrics.max_loss,
+                    "delta_exposure": item.metrics.delta_exposure,
+                    "gamma_exposure": item.metrics.gamma_exposure,
+                    "vega_exposure": item.metrics.vega_exposure,
+                    "theta_exposure": item.metrics.theta_exposure,
+                    "skew_exposure": item.metrics.skew_exposure,
+                    "break_even_levels": self._static_eval._compute_break_evens(
+                        simulation_result.terminal_prices,
+                        pnl_distributions.get(f"{item.metrics.strategy_type}:{item.metrics.strikes}", np.array([], dtype=float)),
+                        spot,
+                    ),
+                    "pnl_distribution": pnl_distributions.get(
+                        f"{item.metrics.strategy_type}:{item.metrics.strikes}",
+                        np.array([], dtype=float),
+                    )[:1200].tolist(),
+                    "fragility_score": item.fragility_score,
+                    "legs": [
+                        {"strike": leg.strike, "option_type": leg.option_type, "direction": leg.direction, "ratio": leg.ratio}
+                        for leg in build_legs(item.metrics.strategy_type, item.metrics.strikes)
+                    ],
+                }
+                for item in ranked
+            ],
+        }
+        self._logger.info("END | recalibrate | rmse=%.6f | converged=%s", calibration_result.metrics.weighted_rmse, calibration_result.converged)
         return response
 
     def run_dynamic_hedge(self, request: PipelineRequest, hedge_mode: HedgeMode, transaction_cost_rate: float) -> Dict[str, Any]:

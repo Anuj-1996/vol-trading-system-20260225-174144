@@ -372,3 +372,108 @@ export async function runLiveForSnapshot(symbol = 'NIFTY', pipelineParams = {}, 
     liveMetadata: { data_id, spot, quality_report, expiry_dates, symbol },
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI Agent System
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function aiChat(query, agent = null, pipelineData = null) {
+  const body = { query };
+  if (agent) body.agent = agent;
+  if (pipelineData) body.pipeline_data = pipelineData;
+  return request('/ai/chat', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function aiChatStream(query, agent = null, pipelineData = null, onChunk = null) {
+  const body = { query };
+  if (agent) body.agent = agent;
+  if (pipelineData) body.pipeline_data = pipelineData;
+
+  const response = await fetch(`${API_BASE}/ai/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.detail || 'AI stream request failed');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+  let agentInfo = { agent: '', role: '' };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const data = JSON.parse(line.slice(6));
+        if (data.agent) agentInfo.agent = data.agent;
+        if (data.role) agentInfo.role = data.role;
+        if (data.chunk) {
+          fullText += data.chunk;
+          onChunk?.({ ...agentInfo, text: fullText, chunk: data.chunk, done: false });
+        }
+        if (data.done) {
+          onChunk?.({ ...agentInfo, text: fullText, chunk: '', done: true });
+        }
+        if (data.error) {
+          throw new Error(data.error);
+        }
+      } catch (parseErr) {
+        if (parseErr.message !== 'AI stream request failed') {
+          // Ignore JSON parse errors from partial chunks
+        }
+      }
+    }
+  }
+
+  return { ...agentInfo, text: fullText };
+}
+
+export async function aiBriefing(pipelineData = null) {
+  const body = {};
+  if (pipelineData) body.pipeline_data = pipelineData;
+  return request('/ai/briefing', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function aiListAgents() {
+  return request('/ai/agents');
+}
+
+export async function aiSyncPipeline(pipelineData) {
+  return request('/ai/pipeline-sync', {
+    method: 'POST',
+    body: JSON.stringify(pipelineData),
+  });
+}
+
+export async function aiClearConversation() {
+  return request('/ai/clear', { method: 'POST', body: '{}' });
+}
+
+export async function aiRecalibrate(dataId, initialGuess = null, paramBounds = null, extraParams = {}) {
+  const body = { data_id: dataId, ...extraParams };
+  if (initialGuess) body.initial_guess = initialGuess;
+  if (paramBounds) body.param_bounds = paramBounds;
+  return request('/ai/recalibrate', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}

@@ -106,6 +106,10 @@ class OrchestratorAgent:
         self._last_pipeline_data = pipeline_response
         self._logger.info("ORCHESTRATOR | pipeline_data_updated | keys=%s", list(pipeline_response.keys()))
 
+    def get_pipeline_data(self) -> Optional[Dict[str, Any]]:
+        """Return latest synced pipeline data for non-chat AI modules."""
+        return self._last_pipeline_data
+
     def get_available_agents(self) -> List[Dict[str, str]]:
         """Return list of available agents with their roles."""
         return [

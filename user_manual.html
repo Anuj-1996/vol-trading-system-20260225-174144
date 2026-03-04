@@ -1,0 +1,1444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vol Trading System - User Manual</title>
+<style>
+  :root {
+    font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    color: #d1d5db;
+    background: #06080f;
+    --accent: #f59e0b;
+    --accent-light: #fbbf24;
+    --bg-deep: #06080f;
+    --bg-panel: #0a0f19;
+    --bg-header: #101826;
+    --bg-bar: #070b13;
+    --border: #1f2937;
+    --border-light: #374151;
+    --text: #d1d5db;
+    --text-muted: #9ca3af;
+    --text-bright: #f9fafb;
+    --green: #22c55e;
+    --red: #ef4444;
+    --red-light: #f87171;
+    --blue: #38bdf8;
+    --orange: #fb923c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg-deep); margin: 0; line-height: 1.65; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--accent-light); text-decoration: underline; }
+
+  /* -- Shell -- */
+  .manual-shell {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    min-height: 100vh;
+  }
+
+  /* -- Sidebar -- */
+  .sidebar {
+    background: var(--bg-bar);
+    border-right: 1px solid var(--border);
+    padding: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  .sidebar-brand {
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 0.86rem;
+    letter-spacing: 0.06em;
+    padding: 14px 16px 6px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
+  }
+  .sidebar-brand small {
+    display: block;
+    color: var(--text-muted);
+    font-weight: 400;
+    font-size: 0.68rem;
+    letter-spacing: 0;
+    margin-top: 4px;
+  }
+  .sidebar-section {
+    padding: 10px 0 4px;
+    color: var(--text-muted);
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    padding-left: 16px;
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+  }
+  .sidebar a {
+    display: block;
+    padding: 6px 16px 6px 24px;
+    font-size: 0.76rem;
+    color: var(--text);
+    border-left: 2px solid transparent;
+    transition: all 0.12s;
+  }
+  .sidebar a:hover {
+    background: #111827;
+    border-left-color: var(--accent);
+    color: var(--accent-light);
+    text-decoration: none;
+  }
+
+  /* -- Main content -- */
+  .main-content {
+    padding: 30px 40px 80px;
+    max-width: 960px;
+    overflow-y: auto;
+  }
+
+  h1 {
+    color: var(--accent);
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+  }
+  h2 {
+    color: var(--accent);
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin-top: 48px;
+    margin-bottom: 14px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    letter-spacing: 0.02em;
+  }
+  h3 {
+    color: var(--text-bright);
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin-top: 28px;
+    margin-bottom: 10px;
+  }
+  h4 {
+    color: var(--blue);
+    font-size: 0.84rem;
+    font-weight: 600;
+    margin-top: 20px;
+    margin-bottom: 8px;
+  }
+
+  p {
+    margin-bottom: 12px;
+    font-size: 0.84rem;
+    color: var(--text);
+  }
+
+  ul, ol {
+    margin-bottom: 14px;
+    padding-left: 24px;
+    font-size: 0.82rem;
+  }
+  li { margin-bottom: 6px; }
+
+  /* Panel-style callout */
+  .panel {
+    border: 1px solid var(--border);
+    background: var(--bg-panel);
+    margin: 16px 0;
+  }
+  .panel-header {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-header);
+    color: var(--accent);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 700;
+  }
+  .panel-body {
+    padding: 12px 14px;
+    font-size: 0.82rem;
+  }
+
+  /* Scenario / example box */
+  .scenario {
+    border: 1px solid #1e3a5f;
+    background: #0b1a2e;
+    padding: 14px 16px;
+    margin: 14px 0;
+    font-size: 0.82rem;
+  }
+  .scenario-title {
+    color: var(--blue);
+    font-weight: 700;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+  }
+
+  /* Warning / important box */
+  .warning {
+    border: 1px solid #7c2d12;
+    background: #1c0f06;
+    padding: 14px 16px;
+    margin: 14px 0;
+    font-size: 0.82rem;
+  }
+  .warning-title {
+    color: var(--orange);
+    font-weight: 700;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+  }
+
+  /* Tip box */
+  .tip {
+    border: 1px solid #14532d;
+    background: #0a1f0e;
+    padding: 14px 16px;
+    margin: 14px 0;
+    font-size: 0.82rem;
+  }
+  .tip-title {
+    color: var(--green);
+    font-weight: 700;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+  }
+
+  /* Key-value table */
+  .kv-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 0.8rem;
+  }
+  .kv-table th {
+    text-align: left;
+    padding: 6px 10px;
+    background: var(--bg-header);
+    color: var(--accent);
+    border: 1px solid var(--border);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .kv-table td {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-panel);
+    vertical-align: top;
+  }
+  .kv-table tr:hover td {
+    background: #111827;
+  }
+
+  /* Inline label */
+  .label {
+    display: inline-block;
+    padding: 1px 6px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    border: 1px solid var(--border-light);
+    background: var(--bg-header);
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+  }
+  .label-accent { border-color: var(--accent); color: var(--accent); }
+  .label-green { border-color: var(--green); color: var(--green); }
+  .label-red { border-color: var(--red-light); color: var(--red-light); }
+  .label-blue { border-color: var(--blue); color: var(--blue); }
+
+  /* Inline code */
+  code {
+    background: #111827;
+    border: 1px solid var(--border);
+    padding: 1px 5px;
+    font-size: 0.78rem;
+    color: var(--accent-light);
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+  }
+
+  /* Kbd for keyboard shortcuts / UI buttons */
+  kbd {
+    display: inline-block;
+    background: #1f2937;
+    border: 1px solid var(--border-light);
+    color: var(--accent-light);
+    padding: 2px 8px;
+    font-size: 0.74rem;
+    font-family: inherit;
+    font-weight: 600;
+  }
+
+  /* Step list */
+  .steps { counter-reset: step-counter; list-style: none; padding-left: 0; }
+  .steps li {
+    counter-increment: step-counter;
+    padding-left: 34px;
+    position: relative;
+    margin-bottom: 14px;
+  }
+  .steps li::before {
+    content: counter(step-counter);
+    position: absolute;
+    left: 0;
+    top: 1px;
+    width: 22px;
+    height: 22px;
+    background: var(--bg-header);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-size: 0.72rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 30px 0;
+  }
+
+  /* Responsive */
+  @media (max-width: 800px) {
+    .manual-shell { grid-template-columns: 1fr; }
+    .sidebar { position: relative; height: auto; }
+    .main-content { padding: 20px 16px 60px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="manual-shell">
+
+<!-- ============================================================ -->
+<!-- SIDEBAR NAVIGATION -->
+<!-- ============================================================ -->
+<nav class="sidebar">
+  <div class="sidebar-brand">
+    VOL TRADING
+    <small>User Manual v3.0</small>
+  </div>
+
+  <div class="sidebar-section">Getting Started</div>
+  <a href="#overview">System Overview</a>
+  <a href="#first-run">Your First Analysis</a>
+  <a href="#layout">Interface Layout</a>
+
+  <div class="sidebar-section">Top Bar Controls</div>
+  <a href="#topbar-underlying">Underlying Selector</a>
+  <a href="#topbar-expiry">Expiry Selector</a>
+  <a href="#topbar-metrics">Live Metrics</a>
+  <a href="#topbar-fetch">Fetch Live &amp; Analyse</a>
+
+  <div class="sidebar-section">Pages</div>
+  <a href="#page-market">Market Overview</a>
+  <a href="#page-surface">Vol Surface</a>
+  <a href="#page-screener">Strategy Screener</a>
+  <a href="#page-detail">Strategy Detail</a>
+  <a href="#page-risk">Risk Lab</a>
+  <a href="#page-backtest">Backtest</a>
+  <a href="#page-portfolio">Portfolio</a>
+  <a href="#page-settings">Settings</a>
+
+  <div class="sidebar-section">AI Copilot</div>
+  <a href="#ai-overview">AI Panel Overview</a>
+  <a href="#ai-agents">Specialist Agents</a>
+  <a href="#ai-briefing">Market Briefing</a>
+  <a href="#ai-recalibrate">AI Recalibration</a>
+  <a href="#ai-strategy-pick">AI Strategy Pick</a>
+
+  <div class="sidebar-section">Reference</div>
+  <a href="#bottom-strip">Status Bar</a>
+  <a href="#glossary">Glossary</a>
+  <a href="#faq">FAQ</a>
+</nav>
+
+<!-- ============================================================ -->
+<!-- MAIN CONTENT -->
+<!-- ============================================================ -->
+<div class="main-content">
+
+
+<!-- ============================================================ -->
+<!-- GETTING STARTED -->
+<!-- ============================================================ -->
+
+<h1 id="overview">System Overview</h1>
+
+<p>
+The Vol Trading System is a quantitative options analysis platform built for NIFTY and BANKNIFTY index options traded on the National Stock Exchange of India. It fetches live option chain data directly from NSE, calibrates a Heston stochastic volatility model, runs Monte Carlo simulations, generates and ranks option strategies, and presents everything through an interactive Bloomberg-terminal-style interface.
+</p>
+
+<p>The system performs the following pipeline every time you click <kbd>Fetch Live &amp; Analyse</kbd>:</p>
+
+<ol>
+  <li>Connects to NSE and downloads the live option chain for all near-term expiries.</li>
+  <li>Cleans the data: removes stale quotes, fixes bid-ask inversions, filters by moneyness.</li>
+  <li>Filters for liquidity: enforces minimum open interest, volume, and bid-ask spread thresholds.</li>
+  <li>Builds the implied volatility surface from the filtered market data.</li>
+  <li>Calibrates the Heston model jointly across all expiries using Carr-Madan FFT pricing.</li>
+  <li>Runs Monte Carlo simulation to generate thousands of terminal price paths.</li>
+  <li>Generates all supported option strategy combinations from available strikes.</li>
+  <li>Evaluates each strategy: expected value, VaR, expected shortfall, Greeks, fragility.</li>
+  <li>Ranks the top strategies using a regime-aware scoring function.</li>
+  <li>Classifies the current market regime (high-vol or low-vol) using GARCH + HMM models.</li>
+</ol>
+
+<p>All results are then presented across eight interactive pages plus an AI copilot panel.</p>
+
+<hr class="divider">
+
+
+<h2 id="first-run">Your First Analysis</h2>
+
+<p>Follow these steps to run your first complete analysis:</p>
+
+<ol class="steps">
+  <li>
+    <strong>Verify the system is running.</strong> Check the bottom status bar. The <span class="label">Backend</span> indicator should show <span class="label-green">connected</span>. If it shows <span class="label-red">disconnected</span>, the backend server is not running.
+  </li>
+  <li>
+    <strong>Select the underlying.</strong> Use the <span class="label">Underlying</span> dropdown in the top bar. Choose <code>NIFTY</code> or <code>BANKNIFTY</code>.
+  </li>
+  <li>
+    <strong>Click <kbd>Fetch Live &amp; Analyse</kbd>.</strong> This button triggers the entire pipeline. A loading overlay will appear showing each step as it completes. The full process typically takes 30-90 seconds depending on the number of expiries and simulation paths.
+  </li>
+  <li>
+    <strong>Review results.</strong> Once complete, all pages are populated with live data. Start with the <strong>Market</strong> page for context, then move to <strong>Strategy Screener</strong> for actionable trades.
+  </li>
+  <li>
+    <strong>Explore the AI Copilot.</strong> Click the AI panel toggle on the right side of the screen. Ask questions such as "What is the current market regime?" or "Which strategy has the best risk-adjusted return?" to get AI-powered analysis.
+  </li>
+</ol>
+
+<div class="scenario">
+  <div class="scenario-title">Example: Morning Routine</div>
+  <p>You open the system at 10:00 AM IST. You select NIFTY as the underlying, leave all settings at defaults, and click <kbd>Fetch Live &amp; Analyse</kbd>. After approximately 45 seconds, the system loads the current option chain covering the next 5 weekly expiries. You check the Market page and see that the regime is classified as "low_vol" with IV Rank at 28% -- this tells you implied volatility is cheap relative to its recent range. You navigate to Strategy Screener and see that Long Straddle and Bull Call Spread rank highly. You open the AI Copilot and ask "Why are long volatility strategies ranking well?" and get an explanation tied to the current IV-vs-RV spread.</p>
+</div>
+
+<hr class="divider">
+
+
+<h2 id="layout">Interface Layout</h2>
+
+<p>The interface follows a Bloomberg-terminal-inspired layout with four zones:</p>
+
+<table class="kv-table">
+  <tr>
+    <th>Zone</th>
+    <th>Location</th>
+    <th>Purpose</th>
+  </tr>
+  <tr>
+    <td><strong>Navigation Bar</strong></td>
+    <td>Top row</td>
+    <td>Brand label and page tabs: Market, Vol Surface, Strategy Screener, Strategy Detail, Risk Lab, Backtest, Portfolio, Settings.</td>
+  </tr>
+  <tr>
+    <td><strong>Status Bar</strong></td>
+    <td>Below navigation</td>
+    <td>Underlying selector, Expiry selector, live spot price, ATM IV, regime indicator, data source, clock, and the primary action button.</td>
+  </tr>
+  <tr>
+    <td><strong>Content Area</strong></td>
+    <td>Center</td>
+    <td>The active page content: charts, tables, and interactive panels.</td>
+  </tr>
+  <tr>
+    <td><strong>Bottom Strip</strong></td>
+    <td>Bottom row</td>
+    <td>Job status, backend connection status, data source, record count, and active snapshot ID.</td>
+  </tr>
+</table>
+
+<p>The <strong>AI Copilot</strong> panel slides in from the right side when activated, overlaying a chat interface without covering the main content.</p>
+
+<div class="tip">
+  <div class="tip-title">Tip: Panel Controls</div>
+  <p>Every chart panel has a maximize button in its header bar. Click it to expand the panel to full screen for detailed inspection. When maximized, click the close button or press Escape to return. Some panels also feature a clipboard button that copies the chart image for pasting into reports.</p>
+</div>
+
+
+
+<!-- ============================================================ -->
+<!-- TOP BAR CONTROLS -->
+<!-- ============================================================ -->
+
+<h1 id="topbar-underlying">Top Bar Controls</h1>
+
+<h3>Underlying Selector</h3>
+<p>
+The <span class="label">Underlying</span> dropdown allows you to choose between <code>NIFTY</code> and <code>BANKNIFTY</code>. This selection determines which index option chain is fetched from NSE. All downstream analysis -- calibration, simulation, strategy generation -- uses data for the selected underlying.
+</p>
+
+<div class="warning">
+  <div class="warning-title">Important</div>
+  <p>Changing the underlying selector does not automatically re-fetch data. You must click <kbd>Fetch Live &amp; Analyse</kbd> after changing the underlying to load new data.</p>
+</div>
+
+<h3 id="topbar-expiry">Expiry Selector</h3>
+<p>
+The <span class="label">Expiry</span> dropdown controls which maturity slice is shown in certain visualizations (Vol Surface smile slices, term structure cross-sections). Options include:
+</p>
+<ul>
+  <li><strong>Auto</strong> -- selects the nearest expiry (default and recommended for most use cases).</li>
+  <li><strong>Numbered expiries</strong> -- e.g., "5D", "12D", "19D" -- correspond to the days-to-expiry for each loaded maturity. Select a specific one to view deeper term structure slices.</li>
+</ul>
+
+<h3 id="topbar-metrics">Live Metrics</h3>
+<p>The status bar displays five key metrics that update when new data is loaded:</p>
+
+<table class="kv-table">
+  <tr><th>Metric</th><th>What It Shows</th></tr>
+  <tr><td><strong>Spot</strong></td><td>Current underlying price from the NSE feed (e.g., 22,485.30).</td></tr>
+  <tr><td><strong>IV ATM</strong></td><td>At-the-money implied volatility from the nearest expiry, displayed as a percentage (e.g., 14.52%).</td></tr>
+  <tr><td><strong>Regime</strong></td><td>Current volatility regime classification. <span class="label-green">low_vol</span> (green) or <span class="label-red">high_vol</span> (red). Determined by the GARCH + HMM model.</td></tr>
+  <tr><td><strong>Source</strong></td><td>Data source indicator. Displays "NSE Live" when using real-time data.</td></tr>
+  <tr><td><strong>Clock</strong></td><td>Current local time, updating every second.</td></tr>
+</table>
+
+<h3 id="topbar-fetch">Fetch Live &amp; Analyse</h3>
+<p>
+This is the primary action button. It triggers the complete analysis pipeline:
+</p>
+<ol>
+  <li>Fetches live option chain data from NSE for the selected underlying.</li>
+  <li>Runs cleaning, filtering, calibration, simulation, strategy evaluation, and ranking.</li>
+  <li>Populates all pages with fresh results.</li>
+  <li>Synchronizes the results to the AI Copilot for context-aware queries.</li>
+</ol>
+
+<p>While the pipeline is running, the button shows "Running..." and a loading overlay displays progress through five stages:</p>
+<ul>
+  <li>Connecting to backend</li>
+  <li>Fetching live option chain from NSE</li>
+  <li>Building volatility surface &amp; calibrating</li>
+  <li>Running Monte Carlo simulations</li>
+  <li>Ranking strategies &amp; computing Greeks</li>
+</ul>
+
+<div class="warning">
+  <div class="warning-title">NSE Market Hours</div>
+  <p>NSE provides delayed option chain data. The data is most useful during market hours (9:15 AM to 3:30 PM IST). Outside market hours, the data reflects the last available snapshot. Expiries that have already passed (after 3:30 PM on expiry day) are automatically excluded.</p>
+</div>
+
+
+
+<!-- ============================================================ -->
+<!-- PAGE: MARKET OVERVIEW -->
+<!-- ============================================================ -->
+
+<h1 id="page-market">Market Overview Page</h1>
+
+<p>
+The Market page provides comprehensive context before making any trading decisions. It answers the question: "What is the current state of the market?" Think of this as your morning briefing screen.
+</p>
+
+<h3>Layout</h3>
+<p>The page is organized into a multi-panel grid with the following sections:</p>
+
+<h4>Price Chart</h4>
+<p>
+A candlestick chart showing the last 180 trading days of the underlying index. This chart includes:
+</p>
+<ul>
+  <li><strong>OHLC candles</strong> -- standard open/high/low/close daily bars.</li>
+  <li><strong>Volume bars</strong> -- displayed below the candles as a secondary axis.</li>
+  <li><strong>20-day realized volatility overlay</strong> -- a blue line showing trailing 20-day annualized volatility.</li>
+  <li><strong>60-day realized volatility overlay</strong> -- a second line for longer-term volatility context.</li>
+</ul>
+<p>Use this chart to visually assess the recent price trend and whether volatility has been expanding or contracting.</p>
+
+<h4>Realized Volatility Metrics</h4>
+<div class="panel">
+  <div class="panel-header">Realized Volatility Metrics</div>
+  <div class="panel-body">
+    <table class="kv-table">
+      <tr><th>Metric</th><th>Description</th><th>How to Read</th></tr>
+      <tr><td>RV 10D</td><td>10-day trailing realized volatility (annualized)</td><td>Short-term actual market movement. If spiking, recent moves have been large.</td></tr>
+      <tr><td>RV 20D</td><td>20-day trailing realized volatility</td><td>Standard benchmark for recent realized vol. Compare with ATM IV to assess risk premium.</td></tr>
+      <tr><td>RV 60D</td><td>60-day trailing realized volatility</td><td>Medium-term baseline. If RV 10D is much higher than RV 60D, short-term volatility is elevated.</td></tr>
+      <tr><td>RV Percentile</td><td>Where current RV sits in its historical distribution (0-100%)</td><td>Below 30% = historically low volatility. Above 70% = historically high.</td></tr>
+    </table>
+  </div>
+</div>
+
+<h4>IV Term Structure</h4>
+<p>
+A line chart showing the ATM implied volatility across all loaded expiries (near-term to far-term). Two lines are plotted:
+</p>
+<ul>
+  <li><strong>Market ATM IV</strong> -- the actual market-implied volatility at the ATM strike for each expiry.</li>
+  <li><strong>Model ATM IV</strong> -- the Heston model's fitted volatility at the same points.</li>
+</ul>
+<p>The shape of this curve tells you about market expectations:</p>
+<ul>
+  <li><strong>Upward sloping (contango)</strong> -- the market expects higher volatility in the future. This is the normal shape.</li>
+  <li><strong>Flat</strong> -- neutral expectations.</li>
+  <li><strong>Inverted (backwardation)</strong> -- the market is pricing near-term risk higher than long-term. Often seen during market stress.</li>
+</ul>
+
+<h4>Skew Curve</h4>
+<p>
+Shows implied volatility plotted against strike price for the selected expiry. Also called the "volatility smile" or "smirk." Key features to observe:
+</p>
+<ul>
+  <li><strong>Left skew (put skew)</strong> -- OTM puts have higher IV than OTM calls. This is the normal shape for equity indices, reflecting demand for downside protection.</li>
+  <li><strong>Steep left skew</strong> -- the market is pricing crash risk aggressively. Selling puts is expensive.</li>
+  <li><strong>Flattening skew</strong> -- reduced demand for downside protection. May favor selling premium strategies.</li>
+</ul>
+
+<h4>Market Regime Box</h4>
+<p>Displays the GARCH + HMM regime classification:</p>
+<ul>
+  <li><span class="label-green">low_vol</span> -- the system believes the market is in a low-volatility regime. Ranking weights favor offensive strategies (Long Straddle, Bull Call Spread).</li>
+  <li><span class="label-red">high_vol</span> -- the system believes the market is in a high-volatility regime. Ranking weights penalize tail risk more heavily, favoring defensive strategies (Iron Condor, Protective Collar).</li>
+</ul>
+<p>The confidence score (0-100%) indicates how clearly the two regimes are separated.</p>
+
+<h4>Vol Stats Panel</h4>
+<table class="kv-table">
+  <tr><th>Metric</th><th>What It Means</th></tr>
+  <tr><td><strong>IV Rank</strong></td><td>Where current ATM IV sits relative to the historical range of realized volatility (0-100%). An IV Rank of 80% means current implied vol is near the top of its historical range -- options are expensive.</td></tr>
+  <tr><td><strong>IV Percentile</strong></td><td>Percentage of historical days when realized vol was below current ATM IV. High values mean IV is expensive relative to history.</td></tr>
+  <tr><td><strong>IV minus RV Spread</strong></td><td>ATM Implied Vol minus 20-day Realized Vol. Positive means options are priced above recent actual movement (typical). Large positive = expensive options. Negative = cheap options.</td></tr>
+  <tr><td><strong>VVIX Equivalent</strong></td><td>A proxy for the "volatility of volatility" -- how much realized vol itself has been moving. High values indicate unstable volatility.</td></tr>
+</table>
+
+<h4>Volatility Model Forecasts</h4>
+<p>
+The system fits four GARCH-family models to the historical return series and displays their fitted volatility paths alongside the actual 20-day realized vol:
+</p>
+<ul>
+  <li><strong>ARCH</strong> -- simple autoregressive conditional heteroskedasticity.</li>
+  <li><strong>GARCH</strong> -- standard GARCH(1,1) with persistence.</li>
+  <li><strong>EGARCH</strong> -- exponential GARCH, captures asymmetric (leverage) effects.</li>
+  <li><strong>GJR-GARCH</strong> -- Glosten-Jagannathan-Runkle GARCH, another asymmetric model.</li>
+</ul>
+<p>If the IV proxy (India VIX) line sits well above the model forecasts, options may be overpriced. If models forecast rising vol but IV is flat, options may be cheap.</p>
+
+<h4>Market Mood Index</h4>
+<p>
+A composite sentiment indicator built from five components: India VIX level, momentum (EMA30 vs EMA90), market breadth (advance/decline ratios of NIFTY 50 constituents), price strength (stocks near 52-week highs vs lows), and gold demand (gold vs index relative returns).
+</p>
+<p>The index is scaled 0-100. Below 30 indicates fear. Above 70 indicates greed. The chart shows the composite and individual component scores over recent months.</p>
+
+<h4>Regression Analysis</h4>
+<p>
+An advanced panel allowing you to run linear regressions between any two data series (e.g., RV 20D vs HV 20D, spot returns vs volatility). Output includes R-squared, F-statistic, t-statistics for coefficients, and a scatter plot with regression line. Use this to quantify relationships between vol metrics.
+</p>
+
+<div class="scenario">
+  <div class="scenario-title">Scenario: Assessing whether options are cheap or expensive</div>
+  <p>You load the Market page after fetching live data. You see: IV ATM = 13.8%, RV 20D = 11.2%, IV Rank = 22%, IV-RV Spread = +2.6%. This tells you: implied vol is above realized vol (normal), but IV Rank is low, meaning current IV is near the bottom of its historical range. Options are relatively cheap. The GARCH models forecast RV staying around 11-12%, and the term structure is in slight contango. Conclusion: this is not a good environment for selling premium. Consider long-volatility strategies or directional spreads.</p>
+</div>
+
+
+<!-- ============================================================ -->
+<!-- PAGE: VOL SURFACE -->
+<!-- ============================================================ -->
+
+<h1 id="page-surface">Vol Surface Page</h1>
+
+<p>
+The Vol Surface page is the core volatility analysis screen. It visualizes the entire option implied volatility landscape and compares the market-observed surface with the Heston model's fitted surface.
+</p>
+
+<h3>3D Surface Plots</h3>
+<p>The top section shows three interactive 3D surface plots that you can rotate, zoom, and pan:</p>
+
+<table class="kv-table">
+  <tr><th>Surface</th><th>What It Shows</th></tr>
+  <tr><td><strong>Market IV Surface</strong></td><td>The implied volatility observed from actual market prices, plotted as strike (x-axis) vs maturity (y-axis) vs IV (z-axis, height and color).</td></tr>
+  <tr><td><strong>Model IV Surface</strong></td><td>The Heston model's fitted IV at the same strike/maturity grid. Should closely follow the market surface if calibration is good.</td></tr>
+  <tr><td><strong>Residual Surface</strong></td><td>The difference: Model IV minus Market IV. Shows where the model over-prices (positive residuals) or under-prices (negative) options. Ideally close to zero everywhere.</td></tr>
+</table>
+
+<p>You can interact with these plots:</p>
+<ul>
+  <li><strong>Rotate</strong> -- click and drag to view from different angles.</li>
+  <li><strong>Zoom</strong> -- scroll wheel to zoom in/out.</li>
+  <li><strong>Hover</strong> -- hover over any point to see the exact strike, maturity, and IV value.</li>
+  <li><strong>Maximize</strong> -- click the expand button in the panel header for full-screen view.</li>
+</ul>
+
+<h4>Smile Slices</h4>
+<p>
+Below the 3D surfaces, the smile slice panel shows a 2D cross-section: IV plotted against strike for a single expiry. Both market and model curves are overlaid. Use the expiry selector (in the top bar or the panel controls) to switch between expiries. Look for:
+</p>
+<ul>
+  <li><strong>Good model fit</strong> -- the two lines track closely. Small residual.</li>
+  <li><strong>Wing mispricing</strong> -- if the model diverges on deep OTM puts or calls, the Heston model struggles with extreme wings.</li>
+  <li><strong>Skew shape</strong> -- steeper put-side skew indicates stronger crash-protection demand.</li>
+</ul>
+
+<h4>Term Structure Slices</h4>
+<p>
+Shows how IV changes across maturities at a fixed strike level (typically ATM). A flat term structure means the market expects stable vol. An inverted one signals near-term stress.
+</p>
+
+<h4>Open Interest Heatmap</h4>
+<p>
+A color-coded matrix showing open interest concentration across strikes and expiries. Bright cells indicate heavy positioning. The <strong>Max Pain</strong> line is overlaid -- this is the strike price at which the maximum number of options would expire worthless, representing the point of maximum pain for option buyers. Max Pain is calculated per expiry.
+</p>
+
+<h4>Spectral Analysis</h4>
+<p>
+An advanced panel that applies Discrete Fourier Transform (DFT) to the IV surface to detect periodic patterns or structural features in the volatility landscape. Displayed as frequency-magnitude plots. This is primarily useful for researchers studying systematic surface dynamics.
+</p>
+
+<h4>Calibration Summary</h4>
+<p>The calibration results from the Heston model are displayed alongside the surface:</p>
+
+<table class="kv-table">
+  <tr><th>Parameter</th><th>Symbol</th><th>Meaning</th></tr>
+  <tr><td>Mean reversion speed</td><td>kappa</td><td>How fast variance reverts to the long-term mean. Higher = faster reversion.</td></tr>
+  <tr><td>Long-term variance</td><td>theta</td><td>The long-run average variance level. sqrt(theta) is the long-term volatility.</td></tr>
+  <tr><td>Vol of vol</td><td>xi</td><td>Volatility of the variance process. Higher = more volatile vol.</td></tr>
+  <tr><td>Correlation</td><td>rho</td><td>Correlation between spot and variance. Negative for equities (spot drops when vol rises).</td></tr>
+  <tr><td>Initial variance</td><td>v0</td><td>Current variance estimate. sqrt(v0) is the current instantaneous volatility.</td></tr>
+  <tr><td>RMSE</td><td>--</td><td>Weighted root-mean-square error between model and market IVs. Lower is better. Below 0.03 is excellent.</td></tr>
+  <tr><td>Feller condition</td><td>2*kappa*theta - xi^2</td><td>Must be positive for the variance process to stay above zero. Negative means the model may produce unrealistic paths.</td></tr>
+</table>
+
+<h4>Recalibrate Button</h4>
+<p>
+If the calibration RMSE is too high or you want to test different parameters, click <kbd>Recalibrate</kbd> on the Vol Surface page. This re-runs only the calibration step (not the data fetch) with potentially different starting parameters or bounds. The system tries multiple seed points automatically, but you can also use the AI Copilot to suggest specific parameter adjustments.
+</p>
+
+<div class="scenario">
+  <div class="scenario-title">Scenario: Diagnosing a bad calibration</div>
+  <p>After fetching data, you check the Vol Surface page and see the residual surface has large patches of red (model under-pricing) on the near-term put wing. The RMSE is 0.082, which is high. The Feller condition reads -0.003, which is negative. This means the calibration struggled -- the Heston model cannot perfectly fit a very steep near-term skew. You click <kbd>Recalibrate</kbd>, which triggers the system to retry with crisis-mode bounds (wider parameter ranges). The new RMSE drops to 0.041 and the Feller condition is positive. The residual surface now shows much smaller deviations.</p>
+</div>
+
+
+<!-- ============================================================ -->
+<!-- PAGE: STRATEGY SCREENER -->
+<!-- ============================================================ -->
+
+<h1 id="page-screener">Strategy Screener Page</h1>
+
+<p>
+The Strategy Screener is where you find actionable trades. It presents the system's ranked strategy recommendations in a sortable, filterable table. This page answers the question: "What should I trade right now?"
+</p>
+
+<h3>Ranking Table</h3>
+<p>
+The main table lists the top-ranked option strategies (up to 10). Each row represents a specific strategy combination with concrete strike prices. Columns include:
+</p>
+
+<table class="kv-table">
+  <tr><th>Column</th><th>Description</th></tr>
+  <tr><td><strong>Strategy Type</strong></td><td>Name of the strategy: Iron Condor, Bull Call Spread, Long Straddle, etc.</td></tr>
+  <tr><td><strong>Legs</strong></td><td>Human-readable leg description. Example: <code>24100P+ 24200P- 24400C- 24500C+</code> means: buy 24100 Put, sell 24200 Put, sell 24400 Call, buy 24500 Call.</td></tr>
+  <tr><td><strong>Premium</strong></td><td>Net premium for the trade. Positive = you pay (debit). Negative = you receive (credit).</td></tr>
+  <tr><td><strong>Expected Value</strong></td><td>Average PnL across all simulated terminal prices. Positive is good.</td></tr>
+  <tr><td><strong>VaR 95 / VaR 99</strong></td><td>Value at Risk: the loss level that is exceeded only 5% or 1% of the time. More negative = more risk.</td></tr>
+  <tr><td><strong>Expected Shortfall</strong></td><td>Average loss in the worst 1% of outcomes. Always worse than VaR 99. This is the "average bad scenario" metric.</td></tr>
+  <tr><td><strong>Return on Margin</strong></td><td>Expected Value divided by margin required. Higher means more capital-efficient.</td></tr>
+  <tr><td><strong>P(Loss)</strong></td><td>Probability of the trade ending in a loss. Lower is better.</td></tr>
+  <tr><td><strong>Delta / Gamma / Vega / Theta</strong></td><td>Aggregate Greek exposures for the strategy. Delta = directional bias. Vega = vol sensitivity. Theta = time decay per day.</td></tr>
+  <tr><td><strong>Fragility</strong></td><td>A measure of tail risk severity: what percentage of outcomes are losses, weighted by the magnitude of the worst case. Lower is better.</td></tr>
+  <tr><td><strong>Score</strong></td><td>The overall composite score used for ranking. Combines expected value, expected shortfall, fragility, and return on margin, weighted by the current market regime.</td></tr>
+</table>
+
+<h4>Leg Direction Notation</h4>
+<p>
+In the legs column, arrows indicate direction:
+</p>
+<ul>
+  <li><strong>Arrow Up (+)</strong> = Long (you buy this option)</li>
+  <li><strong>Arrow Down (-)</strong> = Short (you sell this option)</li>
+  <li><strong>C</strong> = Call option</li>
+  <li><strong>P</strong> = Put option</li>
+  <li><strong>2x</strong> prefix = ratio leg (you hold 2 contracts of this leg)</li>
+</ul>
+<p>Example: <code>24200C+ 24400C-</code> means: Buy 1 lot of 24200 Call, Sell 1 lot of 24400 Call = Bull Call Spread.</p>
+
+<h4>Sorting and Filtering</h4>
+<p>Click any column header to sort the table by that metric. The filter bar at the top allows you to narrow results:</p>
+<ul>
+  <li><strong>Strategy Type</strong> -- filter to a specific strategy family (e.g., only Iron Condors).</li>
+  <li><strong>Max Margin</strong> -- hide strategies requiring more margin than you want to deploy.</li>
+  <li><strong>Delta Range</strong> -- filter by directional exposure.</li>
+  <li><strong>Vega Range</strong> -- filter by vol sensitivity.</li>
+</ul>
+
+<h4>Selected Strategy Summary</h4>
+<p>
+Click any row to select it. A summary panel appears showing:
+</p>
+<ul>
+  <li><strong>Mini payoff diagram</strong> -- the intrinsic payoff at expiry plotted across a range of spot prices.</li>
+  <li><strong>Key Greeks</strong> -- a bar chart of Delta, Gamma, Vega, and Theta for the selected strategy.</li>
+  <li><strong>Leg prices</strong> -- market mid-price, bid, and ask for each leg. If bid-ask data is missing or the spread is wide, a liquidity warning is shown.</li>
+</ul>
+
+<h4>Add to Portfolio</h4>
+<p>
+When you have selected a strategy you want to track, click <kbd>Add to Portfolio</kbd>. This saves the strategy to the persistent portfolio database along with the current spot price and all expected metrics. You can later compare expected vs actual performance on the Portfolio page.
+</p>
+
+<h4>Agentic Strategy Selector</h4>
+<p>
+Click the <kbd>AI Strategy Pick</kbd> button above the table to invoke the AI Strategy Picker. This uses a rule-based scoring system combined with an LLM explanation to:
+</p>
+<ol>
+  <li>Identify which strategy families fit the current volatility regime.</li>
+  <li>Score each candidate on probability of loss, fragility, liquidity, expected value, and return on margin.</li>
+  <li>Select the best candidate and provide a human-readable explanation of why it was chosen and what risks to watch.</li>
+</ol>
+
+<div class="scenario">
+  <div class="scenario-title">Scenario: Selecting a credit spread in a high-IV environment</div>
+  <p>You fetch live data and see IV Rank at 78%, regime = high_vol. You navigate to Strategy Screener. The top-ranked strategy is an Iron Condor (24000P+ 24100P- 24400C- 24500C+) with Expected Value = 1,842, VaR 99 = -3,200, P(Loss) = 38%, Score = 0.72. You click it and see the payoff diagram -- a flat profit zone between 24100 and 24400 with limited loss on the wings. You check the legs panel: all four legs have market bid-ask quotes with spreads under 2%. No liquidity warning. You click <kbd>Add to Portfolio</kbd> to track this position. Later, you use the AI Strategy Pick to get a second opinion -- it confirms the Iron Condor choice and warns that the main risk is a spot move beyond 24500 before expiry.</p>
+</div>
+
+<div class="tip">
+  <div class="tip-title">Tip: INR Values</div>
+  <p>All premium, expected value, VaR, and expected shortfall figures in the screener are displayed in per-unit terms. The system also shows values in INR using the NIFTY lot size (currently 75 units). Look for the "Rs" column or hover over values to see the INR equivalent. For example, an Expected Value of 120 per unit translates to Rs 9,000 per lot.</p>
+</div>
+
+
+<!-- ============================================================ -->
+<!-- PAGE: STRATEGY DETAIL -->
+<!-- ============================================================ -->
+
+<h1 id="page-detail">Strategy Detail Page</h1>
+
+<p>
+The Strategy Detail page provides a deep-dive analysis of the strategy you selected on the Screener page. It answers: "What exactly will happen to my position under different market scenarios?"
+</p>
+
+<h3>Key Metrics Summary</h3>
+<p>
+The top of the page shows a compact summary of the selected strategy: strategy type, leg description, expiry date, net premium, expected value, VaR, Greeks, fragility score, and overall rank score.
+</p>
+
+<h4>Payoff at Expiry Chart</h4>
+<p>
+A line chart showing the intrinsic payoff of the strategy at expiration across a wide range of terminal spot prices. This is computed from the actual option legs (not from simulation). It shows:
+</p>
+<ul>
+  <li>The profit/loss at each possible spot price at expiry.</li>
+  <li>Break-even levels marked with vertical lines.</li>
+  <li>Maximum profit and maximum loss zones.</li>
+</ul>
+<p>The area above zero is shaded green (profit zone) and below zero is shaded red (loss zone).</p>
+
+<h4>PnL Distribution Histogram</h4>
+<p>
+A histogram of the Monte Carlo simulated PnL outcomes. This shows the probability distribution of how your trade might perform. Key overlays:
+</p>
+<ul>
+  <li><strong>VaR 95 line</strong> -- the vertical red line marking the 5th percentile loss.</li>
+  <li><strong>VaR 99 line</strong> -- the vertical darker red line marking the 1st percentile loss.</li>
+  <li><strong>Expected Value line</strong> -- the vertical green line marking the average outcome.</li>
+</ul>
+<p>A distribution skewed to the right with a small left tail is favorable. A long left tail indicates significant downside risk.</p>
+
+<h4>Monte Carlo Paths</h4>
+<p>
+A fan chart showing simulated spot price paths through time to expiry. Displays:
+</p>
+<ul>
+  <li><strong>Median path</strong> -- the 50th percentile trajectory.</li>
+  <li><strong>5th-95th percentile cone</strong> -- the shaded area within which 90% of paths fall.</li>
+  <li><strong>25th-75th percentile cone</strong> -- the inner, darker shaded area.</li>
+  <li><strong>Strike levels</strong> -- horizontal lines at the strategy's strikes, so you can see when paths cross into profit or loss zones.</li>
+</ul>
+
+<h4>Greeks vs Spot</h4>
+<p>
+Interactive charts showing how Delta and Gamma change as the spot price moves. This is critical for understanding how your directional exposure shifts if the market moves. For example, a Long Straddle has near-zero Delta at initiation but Delta grows rapidly as spot moves away from the straddle strike.
+</p>
+
+<h4>Vol Sensitivity</h4>
+<p>
+Shows how the strategy's value changes with implied volatility shifts. Plots the PnL impact of a 1% increase and 1% decrease in IV across a range of spot prices. Long-volatility strategies (straddles, strangles) profit from vol increases; short-volatility (iron condors) profit from vol decreases.
+</p>
+
+<h4>Stress Scenarios Table</h4>
+<p>
+A table computing the approximate PnL impact under specific shock scenarios:
+</p>
+
+<table class="kv-table">
+  <tr><th>Scenario</th><th>What It Tests</th></tr>
+  <tr><td>Spot -5%</td><td>PnL if the underlying drops 5% from current level.</td></tr>
+  <tr><td>Spot +5%</td><td>PnL if the underlying rallies 5%.</td></tr>
+  <tr><td>Vol +10%</td><td>PnL if implied volatility increases by 10 percentage points.</td></tr>
+  <tr><td>Vol Crush</td><td>PnL if implied volatility drops by 12 percentage points (post-event collapse).</td></tr>
+  <tr><td>Time Decay 1 Week</td><td>PnL impact of 7 days of theta decay with no spot movement.</td></tr>
+</table>
+
+<div class="scenario">
+  <div class="scenario-title">Scenario: Evaluating a Long Straddle</div>
+  <p>You selected a Long Straddle at strike 24250 from the Screener. On the Detail page, you check the payoff at expiry chart -- it shows a V-shape with break-evens at 24050 and 24450. The PnL histogram shows a bimodal distribution: most outcomes are small losses (theta decay eating the premium), but a meaningful tail of large wins when big moves occur. The stress table shows: Spot -5% = +8,200, Spot +5% = +7,800, Vol +10% = +4,500, Vol Crush = -6,100, Time Decay 1W = -2,300. You conclude the trade needs a significant move or vol expansion to profit, and time decay is the biggest risk if the market stays quiet.</p>
+</div>
+
+
+<!-- ============================================================ -->
+<!-- PAGE: RISK LAB -->
+<!-- ============================================================ -->
+
+<h1 id="page-risk">Risk Lab Page</h1>
+
+<p>
+The Risk Lab is a sensitivity analysis workbench. It lets you interactively adjust market conditions and instantly see how the selected strategy's risk metrics change. This is your "what if" tool.
+</p>
+
+<h3>Control Panel (Left Side)</h3>
+<p>Three sliders control the scenario inputs:</p>
+
+<table class="kv-table">
+  <tr><th>Slider</th><th>Range</th><th>What It Does</th></tr>
+  <tr><td><strong>Spot Shift %</strong></td><td>-15% to +15%</td><td>Simulates the underlying moving up or down by this percentage from its current level.</td></tr>
+  <tr><td><strong>IV Shift %</strong></td><td>-15% to +15%</td><td>Simulates implied volatility increasing or decreasing by this absolute amount.</td></tr>
+  <tr><td><strong>Time Decay (Days)</strong></td><td>0 to 30</td><td>Simulates the passage of time, applying theta decay for the specified number of days.</td></tr>
+</table>
+
+<p>As you move the sliders, all output panels update in real time.</p>
+
+<h3>Output Panels (Right Side)</h3>
+
+<h4>Scenario Metrics</h4>
+<p>
+Shows the base case PnL alongside the scenario PnL, adjusted Delta, and risk metric changes. The PnL is computed via Taylor expansion:
+</p>
+<p style="text-align:center; color: var(--blue); font-style: italic;">
+PnL = Delta * dS + 0.5 * Gamma * dS^2 + Vega * dIV + Theta * dT
+</p>
+
+<h4>Spot Sensitivity Chart</h4>
+<p>
+A line chart showing PnL across a range of spot prices at the current IV and time settings. The current spot is marked with a vertical line. Move the Spot Shift slider and watch the vertical marker shift along the curve.
+</p>
+
+<h4>Vol Sensitivity Chart</h4>
+<p>
+A line chart showing PnL across a range of IV levels at the current spot and time settings. Useful for quantifying how much your position benefits or suffers from vol changes.
+</p>
+
+<h4>2D PnL Heatmap</h4>
+<p>
+A color-coded matrix showing PnL for every combination of spot shift and IV shift simultaneously. Green cells indicate profit; red cells indicate loss. This gives you a complete picture of the joint risk surface. The current scenario point is highlighted.
+</p>
+
+<h4>PnL Distribution</h4>
+<p>
+The Monte Carlo PnL histogram for the selected strategy, with VaR 95 and VaR 99 lines overlaid. This does not change with sliders -- it shows the original simulation distribution for baseline comparison.
+</p>
+
+<div class="scenario">
+  <div class="scenario-title">Scenario: Testing an Iron Condor's resilience</div>
+  <p>You have an Iron Condor selected with short strikes at 24100 Put and 24400 Call. You move the Spot Shift slider to -3% and see the PnL is still slightly positive -- you are within the profit zone. You push it to -5% and the PnL turns negative (-2,800) as you have breached the lower wing. Now you move the IV Shift slider to +5% while keeping spot at -5%. The PnL worsens to -4,200 because rising vol inflates the value of the options you sold. You check the 2D heatmap and see the danger zone: any combination of spot down more than 4% with vol up more than 3% puts the position at a significant loss. This tells you where to set your mental stop-loss.</p>
+</div>
+
+
+<!-- ============================================================ -->
+<!-- PAGE: BACKTEST -->
+<!-- ============================================================ -->
+
+<h1 id="page-backtest">Backtest Page</h1>
+
+<p>
+The Backtest page shows historical performance statistics synthesized from the Monte Carlo simulation. Since this system does not have access to historical option pricing databases, the backtest is constructed by sampling from the simulated PnL distributions of the top-ranked strategy, using the hold-to-maturity period as the rebalancing window.
+</p>
+
+<h3>Charts</h3>
+
+<h4>Equity Curve</h4>
+<p>
+Cumulative PnL over the simulated backtest periods. An upward-trending curve indicates the strategy would have been consistently profitable. Flat or declining segments indicate drawdowns.
+</p>
+
+<h4>Drawdown Chart</h4>
+<p>
+Shows the peak-to-trough decline at each point in the backtest. The maximum drawdown is the largest drop from a peak -- this is the worst historical loss you would have experienced if you held this strategy continuously.
+</p>
+
+<h4>Period PnL Bar Chart</h4>
+<p>
+Bar chart showing the PnL for each individual holding period. Green bars are winning periods; red bars are losses. Helps you visualize win/loss clustering and magnitude.
+</p>
+
+<h4>Rolling Sharpe Ratio</h4>
+<p>
+An expanding-window Sharpe ratio plotted over time. Shows whether the strategy's risk-adjusted performance is stable or deteriorating. A declining rolling Sharpe suggests the edge may be fading.
+</p>
+
+<h4>PnL Distribution</h4>
+<p>
+Histogram of individual period returns with key percentile markers.
+</p>
+
+<h3>Performance Metrics Table</h3>
+
+<table class="kv-table">
+  <tr><th>Metric</th><th>Description</th></tr>
+  <tr><td><strong>Sharpe Ratio</strong></td><td>Mean return / standard deviation, annualized. Above 1.0 is good. Above 2.0 is excellent.</td></tr>
+  <tr><td><strong>Sortino Ratio</strong></td><td>Like Sharpe but only penalizes downside volatility. Better for strategies with asymmetric payoffs.</td></tr>
+  <tr><td><strong>Max Drawdown</strong></td><td>Largest peak-to-trough drop. If this exceeds your pain tolerance, the strategy is too risky for you.</td></tr>
+  <tr><td><strong>Win Rate</strong></td><td>Percentage of periods that were profitable.</td></tr>
+  <tr><td><strong>Total Return</strong></td><td>Cumulative PnL over the entire backtest.</td></tr>
+  <tr><td><strong>Mean / Best / Worst</strong></td><td>Average, best, and worst single-period PnL.</td></tr>
+  <tr><td><strong>Overfit Probability (PBO)</strong></td><td>Probability of Backtest Overfitting. Estimated using combinatorial cross-validation. Values above 50% suggest the top-ranked strategy may not hold up out-of-sample.</td></tr>
+</table>
+
+<div class="warning">
+  <div class="warning-title">Backtest Limitations</div>
+  <p>This backtest is synthesized from Monte Carlo PnL distributions, not from actual historical option trades. It provides useful stress-testing and statistical properties, but should not be treated as a historical track record. Real trading involves slippage, execution risk, and changing market conditions not captured here.</p>
+</div>
+
+
+<!-- ============================================================ -->
+<!-- PAGE: PORTFOLIO -->
+<!-- ============================================================ -->
+
+<h1 id="page-portfolio">Portfolio Page</h1>
+
+<p>
+The Portfolio page is your live position book. Strategies added from the Screener are stored here with their expected metrics at the time of entry. You can revalue them against the latest market data to compare expected vs actual performance.
+</p>
+
+<h3>Portfolio Summary Bar</h3>
+<p>
+At the top, portfolio-level totals are displayed:
+</p>
+<ul>
+  <li><strong>Total Expected PnL</strong> -- sum of expected values across all open positions.</li>
+  <li><strong>Total Actual PnL</strong> -- sum of actual (revalued) PnL based on current spot price changes.</li>
+  <li><strong>Total Delta / Gamma / Vega / Theta</strong> -- aggregate Greek exposures of the entire portfolio.</li>
+  <li><strong>Total Margin</strong> -- total margin deployed across all positions.</li>
+</ul>
+
+<h4>Expected vs Actual PnL Chart</h4>
+<p>
+A grouped bar chart showing, for each position, the expected PnL (what the model predicted at entry) alongside the actual PnL (computed from current spot price movement using Greeks). This lets you quickly see which positions are performing better or worse than expected.
+</p>
+
+<h4>Greeks Exposure Charts</h4>
+<p>
+Mini bar charts showing the portfolio-level Delta, Gamma, Vega, and Theta contributions from each position. Useful for monitoring portfolio-level risk concentration.
+</p>
+
+<h3>Positions Table</h3>
+<p>
+Each row shows a saved position with all metrics. Columns are split into "Expected" (at entry) and "Actual" (revalued):
+</p>
+<ul>
+  <li>Expected vs Actual EV (Expected Value)</li>
+  <li>Expected vs Actual VaR 95 and VaR 99</li>
+  <li>Expected vs Actual Expected Shortfall</li>
+  <li>Expected vs Actual Probability of Loss</li>
+  <li>Spot at Entry vs Live Spot</li>
+  <li>Spot change (absolute and percentage)</li>
+</ul>
+
+<h4>Revalue</h4>
+<p>
+Click the <kbd>Revalue</kbd> button to compute actual PnL and updated risk metrics for all open positions using the latest cached market data. The actual PnL is estimated using:
+</p>
+<ul>
+  <li>First-order: Delta * spot change</li>
+  <li>Second-order: 0.5 * Gamma * (spot change)^2</li>
+  <li>The original PnL distribution is shifted by the delta-adjusted spot move to recompute VaR and ES.</li>
+</ul>
+
+<h4>Managing Positions</h4>
+<ul>
+  <li><strong>Expand a row</strong> -- click any position row to expand detailed metrics.</li>
+  <li><strong>Delete a position</strong> -- click the delete button on a position row to remove it permanently.</li>
+  <li><strong>Open / Closed tabs</strong> -- filter between active and closed positions.</li>
+  <li><strong>Clear All</strong> -- removes all positions from the portfolio. Use with caution.</li>
+</ul>
+
+<div class="scenario">
+  <div class="scenario-title">Scenario: Tracking a position over two days</div>
+  <p>On Monday, you add an Iron Condor to the portfolio. Spot = 24,250. Expected EV = 1,842. VaR 99 = -3,200. On Wednesday, you click <kbd>Revalue</kbd>. Spot is now 24,180 (down 0.29%). The actual PnL shows +320 (favorable, as the move was small and within your profit zone). The actual VaR 99 has shifted to -2,980 (slightly improved due to time decay). You compare the Expected vs Actual bars in the chart and see the position is tracking well. If spot had dropped to 23,800 (down 1.86%), the actual PnL would show a larger negative number, and you would see the actual VaR worsening substantially.</p>
+</div>
+
+
+<!-- ============================================================ -->
+<!-- PAGE: SETTINGS -->
+<!-- ============================================================ -->
+
+<h1 id="page-settings">Settings Page</h1>
+
+<p>
+The Settings page lets you configure the system parameters before running the analysis pipeline. Changes take effect on the next <kbd>Fetch Live &amp; Analyse</kbd> run.
+</p>
+
+<h3>Configuration Panels</h3>
+
+<table class="kv-table">
+  <tr><th>Setting</th><th>Default</th><th>Guidance</th></tr>
+  <tr><td><strong>Model Selection</strong></td><td>Heston</td><td>The pricing model used for calibration. Heston is the production model. Black-Scholes and SABR are listed for future expansion.</td></tr>
+  <tr><td><strong>Risk Free Rate</strong></td><td>0.065 (6.5%)</td><td>The annualized risk-free interest rate used in pricing. Match the current RBI repo rate or T-bill yield.</td></tr>
+  <tr><td><strong>Dividend Yield</strong></td><td>0.012 (1.2%)</td><td>The annualized dividend yield of the NIFTY index.</td></tr>
+  <tr><td><strong>Strike Increment</strong></td><td>50</td><td>Only strikes that are multiples of this value are considered. NIFTY uses 50-point increments.</td></tr>
+  <tr><td><strong>Max Width</strong></td><td>1000</td><td>Maximum spread width (distance between outermost strikes in a multi-leg strategy) in index points.</td></tr>
+  <tr><td><strong>Capital Limit</strong></td><td>500,000</td><td>Maximum margin per strategy. Strategies requiring more margin than this are excluded.</td></tr>
+  <tr><td><strong>Max Legs</strong></td><td>4</td><td>Maximum number of option legs per strategy. 4 covers most standard strategies (Iron Condor has 4 legs).</td></tr>
+  <tr><td><strong>Simulation Paths</strong></td><td>5,000</td><td>Number of Monte Carlo paths. More paths = more accurate statistics but slower. 5,000-30,000 is the practical range. Use 30,000 for production analysis.</td></tr>
+  <tr><td><strong>Simulation Steps</strong></td><td>32</td><td>Number of time steps per path. Higher values improve path accuracy. 32-64 is sufficient for most uses.</td></tr>
+  <tr><td><strong>Number of Expiries</strong></td><td>5</td><td>How many near-term expiries to fetch from NSE. More expiries provide richer term-structure data for Heston calibration, but each expiry adds approximately 2 seconds to the fetch time. 5-8 is optimal.</td></tr>
+  <tr><td><strong>Confidence Level</strong></td><td>99%</td><td>Confidence level for VaR/ES calculations.</td></tr>
+  <tr><td><strong>Scoring Weights</strong></td><td>EV:0.30, VaR:0.25, ES:0.20, RoM:0.15, Fragility:0.10</td><td>Editable text defining how the overall strategy score is computed. Adjust to prioritize different risk-return tradeoffs.</td></tr>
+</table>
+
+<h4>Live Logs</h4>
+<p>
+The Settings page includes a live log viewer showing the backend server's recent log output. This is useful for diagnosing issues: if a pipeline run fails, check the logs for error messages with context about which step failed and why.
+</p>
+
+<div class="tip">
+  <div class="tip-title">Tip: Quick vs. Detailed Analysis</div>
+  <p>For a fast market check, use 5,000 simulation paths and 3-4 expiries. The pipeline will complete in under 30 seconds. For a thorough analysis before placing a trade, increase to 30,000 paths and 6-8 expiries. This takes 60-90 seconds but provides more statistically robust results.</p>
+</div>
+
+
+<!-- ============================================================ -->
+<!-- AI COPILOT -->
+<!-- ============================================================ -->
+
+<h1 id="ai-overview">AI Copilot Panel</h1>
+
+<p>
+The AI Copilot is a chat-based assistant that runs locally using a Gemma language model via Ollama. It has full access to your pipeline data -- market conditions, calibration parameters, strategy rankings, and risk metrics -- and can provide analysis, explanations, and recommendations in natural language.
+</p>
+
+<h3>Opening the Panel</h3>
+<p>
+Click the AI toggle button on the right edge of the screen. The panel slides in from the right. It can remain open while you navigate between pages. The panel does not block interaction with the main content area.
+</p>
+
+<h3>Chat Interface</h3>
+<p>
+Type your question in the input field at the bottom and press Enter or click Send. The AI will route your query to the most relevant specialist agent and stream the response in real time. Previous messages in the conversation are preserved for context.
+</p>
+
+<div class="panel">
+  <div class="panel-header">Quick Prompts</div>
+  <div class="panel-body">
+    <p>Pre-defined question buttons appear above the input field for common queries:</p>
+    <ul>
+      <li><kbd>Market Outlook</kbd> -- ask the Market Intel agent about the current volatility environment.</li>
+      <li><kbd>Best Strategy</kbd> -- ask the Strategy Advisor to explain the top-ranked trade.</li>
+      <li><kbd>Risk Check</kbd> -- ask the Risk Analyst about tail risks and worst-case scenarios.</li>
+      <li><kbd>Calibration Status</kbd> -- ask the Calibration Monitor about model fit quality.</li>
+    </ul>
+  </div>
+</div>
+
+<h3>Forcing a Specific Agent</h3>
+<p>
+The system auto-detects which agent to use based on your question keywords. If you want to direct your question to a specific agent, select the agent from the dropdown menu above the input field. Agents available:
+</p>
+
+<h2 id="ai-agents">Specialist Agents</h2>
+
+<table class="kv-table">
+  <tr><th>Agent</th><th>Expertise</th><th>Example Questions</th></tr>
+  <tr>
+    <td><strong>Market Intel</strong></td>
+    <td>Market conditions, regime analysis, IV/RV metrics, sentiment, open interest patterns.</td>
+    <td>
+      "What is the current market regime and why?"<br>
+      "Is IV expensive or cheap right now?"<br>
+      "What does the open interest profile suggest about market positioning?"
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Strategy Advisor</strong></td>
+    <td>Strategy selection, trade rationale, comparison between strategies.</td>
+    <td>
+      "Why is the Iron Condor ranked first?"<br>
+      "Compare the top two strategies."<br>
+      "What type of strategy should I use in this environment?"
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Risk Analyst</strong></td>
+    <td>Risk metrics, stress scenarios, tail risks, Greek exposures, what-if analysis.</td>
+    <td>
+      "What is the worst-case scenario for my top strategy?"<br>
+      "What happens if spot drops 5% and vol spikes?"<br>
+      "Is the fragility score concerning for this trade?"
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Calibration Monitor</strong></td>
+    <td>Heston parameter analysis, calibration quality, model fit diagnostics.</td>
+    <td>
+      "Is the calibration stable?"<br>
+      "Why is the RMSE high?"<br>
+      "Should I recalibrate with different bounds?"
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Trade Execution</strong></td>
+    <td>Entry planning, position sizing, margin requirements, execution risks, slippage.</td>
+    <td>
+      "How many lots should I trade?"<br>
+      "What is the optimal entry timing?"<br>
+      "What are the slippage risks on these strikes?"
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Pre-Trade</strong></td>
+    <td>Pre-trade risk check, hidden risks, scenario matrices, trade approval/rejection.</td>
+    <td>
+      "Should I enter this trade?"<br>
+      "What hidden risks exist in this position?"<br>
+      "Run a pre-trade checklist for the top strategy."
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Vol Surface</strong></td>
+    <td>Volatility surface analysis, smile dynamics, skew, term structure, VRP.</td>
+    <td>
+      "Is the vol surface showing any anomalies?"<br>
+      "What does the skew slope tell us?"<br>
+      "Is there a term structure trading opportunity?"
+    </td>
+  </tr>
+</table>
+
+<h2 id="ai-briefing">Market Briefing</h2>
+
+<p>
+Click the <kbd>Briefing</kbd> button in the AI panel to generate a comprehensive market briefing. This automatically queries all specialist agents and compiles their outputs into a structured report covering:
+</p>
+<ol>
+  <li>Market environment summary (Market Intel agent)</li>
+  <li>Vol surface assessment (Vol Surface agent)</li>
+  <li>Calibration health check (Calibration Monitor agent)</li>
+  <li>Strategy recommendation (Strategy Advisor agent)</li>
+  <li>Risk assessment (Risk Analyst agent)</li>
+  <li>Execution plan (Trade Execution agent)</li>
+</ol>
+
+<p>The briefing takes 15-30 seconds to generate (each agent produces its section sequentially). Use this as your morning summary before making any trading decisions.</p>
+
+
+<h2 id="ai-recalibrate">AI Recalibration</h2>
+
+<p>
+If the Calibration Monitor agent identifies calibration issues (high RMSE, Feller condition violated, wing mispricing), it may suggest re-running calibration with modified parameters. The AI panel supports an interactive recalibration workflow:
+</p>
+
+<ol class="steps">
+  <li>Ask the Calibration Monitor: "Should I recalibrate?"</li>
+  <li>The agent analyzes the current calibration and, if issues exist, suggests specific initial guess values and parameter bounds.</li>
+  <li>An inline form appears in the chat showing the suggested kappa, theta, xi, rho, and v0 values. You can edit these before applying.</li>
+  <li>Click <kbd>Apply &amp; Recalibrate</kbd> to trigger recalibration with your approved parameters.</li>
+  <li>The system re-runs calibration, simulation, evaluation, and ranking on the same cached market data, then updates all pages with the new results.</li>
+</ol>
+
+<div class="tip">
+  <div class="tip-title">Tip</div>
+  <p>You do not need to re-fetch data from NSE for recalibration. The system uses the cached option chain data and only re-runs the computation steps, saving significant time.</p>
+</div>
+
+
+<h2 id="ai-strategy-pick">AI Strategy Pick</h2>
+
+<p>
+The AI Strategy Pick is a dedicated feature (separate from general chat) that uses a rule-based scoring system to select the optimal strategy for current conditions:
+</p>
+<ol>
+  <li>It identifies which strategy families suit the current regime (e.g., Iron Condors in high-vol, Long Straddles in low-vol).</li>
+  <li>It scores each candidate on five criteria: probability of loss, fragility, liquidity, expected value, and return on margin.</li>
+  <li>It applies bonus/penalty adjustments for regime-fit, negative EV, and liquidity warnings.</li>
+  <li>The top candidate is passed to a local LLM for a brief, human-readable explanation of why it was selected and what risks to monitor.</li>
+</ol>
+
+<p>Access this via the <kbd>AI Strategy Pick</kbd> button on the Strategy Screener page or by asking the AI copilot "Pick the best strategy."</p>
+
+
+
+<!-- ============================================================ -->
+<!-- BOTTOM STATUS STRIP -->
+<!-- ============================================================ -->
+
+<h1 id="bottom-strip">Bottom Status Bar</h1>
+
+<p>The bottom strip provides at-a-glance system health information:</p>
+
+<table class="kv-table">
+  <tr><th>Indicator</th><th>Values</th><th>Meaning</th></tr>
+  <tr>
+    <td><strong>Job Status</strong></td>
+    <td>idle / running / completed / failed</td>
+    <td>Status of the latest background job (e.g., dynamic hedging simulation). Most operations are foreground, so this usually shows "idle."</td>
+  </tr>
+  <tr>
+    <td><strong>Backend</strong></td>
+    <td><span class="label-green">connected</span> / <span class="label-red">disconnected</span> / <span class="label">unknown</span></td>
+    <td>Whether the frontend can reach the backend API. "connected" is required for all operations.</td>
+  </tr>
+  <tr>
+    <td><strong>Data</strong></td>
+    <td><span class="label-green">NSE NIFTY</span> / <span class="label">pending</span></td>
+    <td>Shows the data source and symbol after data has been loaded.</td>
+  </tr>
+  <tr>
+    <td><strong>Records</strong></td>
+    <td>Numeric count</td>
+    <td>Number of option chain records after data cleaning. Higher numbers mean more liquid market and better surface coverage.</td>
+  </tr>
+  <tr>
+    <td><strong>Snapshot</strong></td>
+    <td>Snapshot ID or "-"</td>
+    <td>Internal identifier for the current data snapshot. Useful for debugging or referencing specific analysis runs.</td>
+  </tr>
+</table>
+
+
+<!-- ============================================================ -->
+<!-- GLOSSARY -->
+<!-- ============================================================ -->
+
+<h1 id="glossary">Glossary</h1>
+
+<table class="kv-table">
+  <tr><th>Term</th><th>Definition</th></tr>
+  <tr><td><strong>ATM (At the Money)</strong></td><td>An option whose strike price is equal to or very close to the current spot price of the underlying.</td></tr>
+  <tr><td><strong>OTM (Out of the Money)</strong></td><td>A call with strike above spot, or a put with strike below spot. These options have no intrinsic value.</td></tr>
+  <tr><td><strong>ITM (In the Money)</strong></td><td>A call with strike below spot, or a put with strike above spot. These options have positive intrinsic value.</td></tr>
+  <tr><td><strong>IV (Implied Volatility)</strong></td><td>The market's expectation of future volatility, extracted from option prices. Higher IV means options are more expensive.</td></tr>
+  <tr><td><strong>RV (Realized Volatility)</strong></td><td>The actual historical volatility computed from past price changes. Compare with IV to assess whether options are cheap or expensive.</td></tr>
+  <tr><td><strong>IV Rank</strong></td><td>Where current IV sits within the historical range of realized volatility. 0% = lowest ever. 100% = highest ever.</td></tr>
+  <tr><td><strong>VaR (Value at Risk)</strong></td><td>The loss level that is exceeded only X% of the time. VaR 99 means only 1% of outcomes are worse than this level.</td></tr>
+  <tr><td><strong>Expected Shortfall (ES)</strong></td><td>The average loss given that VaR has been breached. Also called Conditional VaR (CVaR). Always more severe than VaR.</td></tr>
+  <tr><td><strong>Delta</strong></td><td>Rate of change of option price with respect to spot price. Delta of +0.5 means the position gains Rs 50 per 1-point spot move (per unit).</td></tr>
+  <tr><td><strong>Gamma</strong></td><td>Rate of change of Delta with respect to spot price. High Gamma means Delta changes rapidly as spot moves.</td></tr>
+  <tr><td><strong>Vega</strong></td><td>Sensitivity of option price to a 1% change in implied volatility. Long Vega profits from vol increases.</td></tr>
+  <tr><td><strong>Theta</strong></td><td>Daily time decay. The amount the position loses per day from the passage of time alone, all else equal.</td></tr>
+  <tr><td><strong>Fragility Score</strong></td><td>Custom metric measuring tail risk severity. Computed as the proportion of losing outcomes multiplied by the magnitude of the 1st percentile loss.</td></tr>
+  <tr><td><strong>Heston Model</strong></td><td>A stochastic volatility model where both the stock price and its variance follow correlated random processes. Used for option pricing that captures the volatility smile.</td></tr>
+  <tr><td><strong>Carr-Madan FFT</strong></td><td>A fast numerical method for pricing options under the Heston model using the Fast Fourier Transform. Used during calibration.</td></tr>
+  <tr><td><strong>GARCH</strong></td><td>Generalized Autoregressive Conditional Heteroskedasticity. A statistical model for time-varying volatility. Used for regime detection.</td></tr>
+  <tr><td><strong>HMM (Hidden Markov Model)</strong></td><td>A probabilistic model that classifies time series into hidden states. Used alongside GARCH to determine whether the market is in a high-vol or low-vol regime.</td></tr>
+  <tr><td><strong>Monte Carlo Simulation</strong></td><td>Random sampling technique that generates thousands of possible future price paths to estimate strategy PnL distributions.</td></tr>
+  <tr><td><strong>Feller Condition</strong></td><td>A mathematical constraint (2*kappa*theta > xi^2) ensuring the Heston variance process stays positive. Violated conditions may produce unrealistic simulation paths.</td></tr>
+  <tr><td><strong>Max Pain</strong></td><td>The strike price at which the total value of outstanding options (open interest) would suffer the maximum loss if the underlying expired there.</td></tr>
+  <tr><td><strong>PBO (Probability of Backtest Overfitting)</strong></td><td>A metric estimating the chance that a strategy selected as the best in-sample would underperform out-of-sample. Above 50% is a warning sign.</td></tr>
+  <tr><td><strong>Lot Size</strong></td><td>The number of units per contract. NIFTY lot size is 75 units. When you see per-unit values, multiply by 75 to get the actual INR amount per lot.</td></tr>
+  <tr><td><strong>Credit Strategy</strong></td><td>A strategy where you receive net premium upfront (e.g., Iron Condor, Bear Call Spread). You profit if the underlying stays within a range.</td></tr>
+  <tr><td><strong>Debit Strategy</strong></td><td>A strategy where you pay net premium upfront (e.g., Long Straddle, Bull Call Spread). You need a large move or vol expansion to profit.</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<!-- FAQ -->
+<!-- ============================================================ -->
+
+<h1 id="faq">Frequently Asked Questions</h1>
+
+<div class="panel">
+  <div class="panel-header">1. How often should I run the analysis?</div>
+  <div class="panel-body">
+    <p>Run <kbd>Fetch Live &amp; Analyse</kbd> once at the start of your trading session (typically around 10:00 AM IST after the market has settled from the opening auction). If you need updated data during the day (e.g., after a significant market move), you can re-run the pipeline. Each run fetches fresh data from NSE.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header">2. Why does the pipeline sometimes take over a minute?</div>
+  <div class="panel-body">
+    <p>The pipeline performs several heavy computations: fetching data from NSE (each expiry requires a separate HTTP call with rate limiting), calibrating the Heston model (iterative optimization), running Monte Carlo simulation (thousands of paths), and evaluating all possible strategy combinations. Use fewer simulation paths (5,000 instead of 30,000) and fewer expiries (3-4 instead of 8) for faster results.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header">3. The calibration RMSE is high. What should I do?</div>
+  <div class="panel-body">
+    <p>First, check if the market data quality is sufficient (look at the Records count in the bottom bar -- you need at least 40-50 filtered records). Try clicking <kbd>Recalibrate</kbd> on the Vol Surface page, which attempts multiple seed points. If RMSE remains above 0.05, ask the AI Calibration Monitor for suggestions. In extreme market conditions (crashes, expiry day), the Heston model may not fit the observed skew perfectly -- this is a known mathematical limitation.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header">4. What does "liquidity warning" mean on a strategy?</div>
+  <div class="panel-body">
+    <p>A liquidity warning appears when one or more legs of the strategy have a bid-ask spread exceeding 5%, or when bid-ask data is missing for a leg. This means you may face significant slippage when entering or exiting the trade. Avoid these strategies for actual trading, or verify the quotes on your broker's platform before entering.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header">5. Can I use this for BANKNIFTY?</div>
+  <div class="panel-body">
+    <p>Yes. Select BANKNIFTY from the Underlying dropdown and click <kbd>Fetch Live &amp; Analyse</kbd>. All analysis, calibration, and strategy generation will use BANKNIFTY option chain data. Note that BANKNIFTY has different characteristics: higher volatility, fewer liquid strikes at deep wings, and a different lot size.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header">6. The AI Copilot is not responding. What is wrong?</div>
+  <div class="panel-body">
+    <p>The AI Copilot requires a local Ollama server running with a Gemma model. Verify that Ollama is running on http://127.0.0.1:11434. If the server is down, AI features will fail silently and return error messages. The AI panel will show the error text. All non-AI features (data fetch, calibration, strategy screening) work independently of Ollama.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header">7. What are the supported strategy types?</div>
+  <div class="panel-body">
+    <p>The system generates and evaluates 18 strategy types:</p>
+    <ul>
+      <li><strong>Single-leg:</strong> Long Call, Long Put, Covered Call, Protective Put, Cash Secured Put</li>
+      <li><strong>Two-leg:</strong> Bull Call Spread, Bear Put Spread, Bull Put Spread, Bear Call Spread, Long Straddle, Long Strangle, Protective Collar, Calendar Spread, Diagonal Spread, Ratio Backspread</li>
+      <li><strong>Four-leg:</strong> Iron Condor, Iron Butterfly, Butterfly Spread</li>
+    </ul>
+    <p>Each strategy is generated with all valid strike combinations from the filtered market data, subject to capital limit, strike increment, and max width constraints.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header">8. How accurate are the expected values and VaR numbers?</div>
+  <div class="panel-body">
+    <p>These are model-based estimates, not guarantees. They depend on: (a) the accuracy of the Heston calibration, (b) the number of Monte Carlo paths (more paths = less sampling noise), (c) the assumption that future market dynamics resemble the calibrated model. Real markets can behave differently -- jumps, liquidity crises, and structural breaks are not captured by the Heston model. Treat the numbers as informed estimates, not precise forecasts.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header">9. What does "Score" mean and how is it computed?</div>
+  <div class="panel-body">
+    <p>The overall Score is a composite measure combining four normalized factors:</p>
+    <p style="color: var(--blue); font-style: italic;">Score = Normalized EV - lambda_es99 * Normalized ES99 - lambda_fragility * Fragility + lambda_rom * Normalized RoM</p>
+    <p>The lambda weights vary by regime. In a high-vol regime, es99 and fragility weights increase (the system penalizes tail risk more heavily). In a low-vol regime, return on margin gets more weight (the system favors offensive strategies). Strategies that appear "too good to be true" (zero VaR and zero P(Loss)) receive a 70% score penalty to prevent unrealistic deep-ITM artifacts from dominating.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header">10. How do I interpret "Spot -5%" in the stress table?</div>
+  <div class="panel-body">
+    <p>The stress scenarios use a Greek-based approximation. "Spot -5%" means: if the underlying index dropped by 5% instantaneously, the estimated PnL change would be approximately Delta * (- 5% * Spot) + 0.5 * Gamma * (5% * Spot)^2. This is a first/second-order approximation and does not account for changes in implied volatility that typically accompany spot moves. For a more complete analysis, use the Risk Lab page where you can simultaneously shift both spot and vol.</p>
+  </div>
+</div>
+
+<hr class="divider">
+<p style="text-align: center; color: var(--text-muted); font-size: 0.72rem; padding: 30px 0;">
+  Vol Trading System &mdash; User Manual v3.0 &mdash; NIFTY Stochastic Volatility Strategy Engine
+</p>
+
+</div><!-- /main-content -->
+</div><!-- /manual-shell -->
+
+</body>
+</html>

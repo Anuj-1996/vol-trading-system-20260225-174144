@@ -15,6 +15,7 @@ from ..services.engine_service import LivePipelineRequest, PipelineRequest, Stra
 from ..services.job_service import AsyncJobService
 from ..simulation.dynamic_hedge import HedgeMode
 from ..ai.orchestrator_agent import OrchestratorAgent
+from ..ai.strategy_picker import StrategyPickerAgent
 from ..data import portfolio_repository as portfolio_db
 
 
@@ -91,6 +92,23 @@ class AIBriefingPayload(BaseModel):
     )
 
 
+class AIStrategyPickPayload(BaseModel):
+    pipeline_data: Optional[dict] = Field(
+        default=None,
+        description="Pipeline response context; if omitted uses last synced pipeline data",
+    )
+    model_id: str = Field(
+        default="gemma3:1b",
+        description="Ollama model id for compact strategy-pick explanation",
+    )
+    max_candidates: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        description="Number of shortlisted candidates to evaluate",
+    )
+
+
 class RecalibratePayload(BaseModel):
     data_id: str = Field(description="Cache key returned by /api/v1/data/fetch-live")
     initial_guess: Optional[dict] = Field(
@@ -116,6 +134,7 @@ _logger = get_logger("APIRouter")
 _engine = StrategyEngineService()
 _jobs = AsyncJobService()
 _orchestrator = OrchestratorAgent()
+_strategy_picker = StrategyPickerAgent()
 
 
 @router.get("/health")
@@ -323,6 +342,29 @@ def ai_briefing(payload: AIBriefingPayload) -> dict:
     except Exception as exc:
         _logger.exception("ERROR | ai_briefing")
         raise HTTPException(status_code=500, detail=f"AI briefing error: {exc}") from exc
+
+
+@router.post("/ai/strategy-pick")
+def ai_strategy_pick(payload: AIStrategyPickPayload) -> dict:
+    """Select best strategy for current market condition (separate from chat copilot)."""
+    _logger.info("START | ai_strategy_pick | model=%s", payload.model_id)
+    try:
+        context_data = payload.pipeline_data or _orchestrator.get_pipeline_data()
+        if not context_data:
+            raise ValueError("No pipeline data available. Run Fetch Live & Analyse first.")
+        result = _strategy_picker.pick(
+            pipeline_data=context_data,
+            model_id=payload.model_id,
+            max_candidates=payload.max_candidates,
+        )
+        _logger.info("END | ai_strategy_pick | strategy=%s", result.get("primary", {}).get("strategy_type"))
+        return {"status": "ok", "data": result}
+    except ValueError as exc:
+        _logger.exception("ERROR | ai_strategy_pick")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _logger.exception("ERROR | ai_strategy_pick")
+        raise HTTPException(status_code=500, detail=f"Strategy picker error: {exc}") from exc
 
 
 @router.get("/ai/agents")

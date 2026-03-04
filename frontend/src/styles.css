@@ -290,6 +290,7 @@ textarea {
 
 .page-market-grid > *,
 .page-surface-grid > *,
+.page-regime-grid > *,
 .page-screener-grid > *,
 .page-detail-grid > *,
 .page-risk-grid > *,
@@ -341,6 +342,56 @@ textarea {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.page-regime-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 4fr) minmax(280px, 1fr);
+  gap: 8px;
+}
+
+.regime-main-stack,
+.regime-side-stack {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.regime-filters-grid {
+  grid-template-columns: 1fr;
+}
+
+.method-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.regime-label-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.regime-label-card {
+  border: 1px solid #1f2937;
+  background: #0b1220;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.regime-label-card span {
+  color: #94a3b8;
+  font-size: 0.66rem;
+}
+
+.regime-label-card strong {
+  color: #f8fafc;
+  font-size: 0.9rem;
 }
 
 .surface-hero,
@@ -423,14 +474,20 @@ textarea {
 
 .page-portfolio-grid {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: minmax(0, 4fr) minmax(260px, 1fr);
   gap: 8px;
 }
 
-.portfolio-top {
-  grid-column: 1 / span 2;
+.portfolio-left,
+.portfolio-right {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  align-content: start;
+}
+
+.portfolio-charts-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -438,6 +495,91 @@ textarea {
   font-size: 1rem;
   color: #f9fafb;
   font-weight: 700;
+}
+
+.portfolio-kpi-stack {
+  display: grid;
+  gap: 6px;
+}
+
+.portfolio-kpi-stack > div {
+  border: 1px solid #1f2937;
+  background: #0b1220;
+  padding: 8px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.portfolio-kpi-stack span {
+  color: #94a3b8;
+  font-size: 0.68rem;
+}
+
+.portfolio-kpi-stack strong {
+  color: #f8fafc;
+  font-size: 0.9rem;
+}
+
+.portfolio-controls-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.portfolio-actions-inline {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.portfolio-tabs-inline {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.portfolio-greeks-raw {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.portfolio-greeks-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.portfolio-greeks-mini-cell {
+  border: 1px solid #1f2937;
+  background: #0b1220;
+  padding: 2px;
+}
+
+.portfolio-greeks-raw > div {
+  border: 1px solid #1f2937;
+  background: #0b1220;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.portfolio-greeks-raw span {
+  color: #94a3b8;
+  font-size: 0.66rem;
+}
+
+.portfolio-greeks-raw strong {
+  color: #f8fafc;
+  font-size: 0.75rem;
 }
 
 .kv-grid {
@@ -681,6 +823,7 @@ textarea {
   .page-market-grid,
   .page-market-split,
   .page-surface-grid,
+  .page-regime-grid,
   .page-detail-grid,
   .page-risk-grid,
   .page-backtest-grid,
@@ -701,12 +844,34 @@ textarea {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .portfolio-charts-row {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-greeks-raw {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-greeks-mini-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .regime-label-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .filters-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .market-metrics-grid {
     grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .regime-label-grid {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -606,6 +606,18 @@ export async function aiRecalibrate(dataId, initialGuess = null, paramBounds = n
   });
 }
 
+export async function aiStrategyPick(pipelineData = null, modelId = 'gemma3:1b', maxCandidates = 3) {
+  const body = {
+    model_id: modelId,
+    max_candidates: maxCandidates,
+  };
+  if (pipelineData) body.pipeline_data = pipelineData;
+  return request('/ai/strategy-pick', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Portfolio Management
 // ─────────────────────────────────────────────────────────────────────────────

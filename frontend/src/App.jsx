@@ -12,6 +12,7 @@ import AICopilotPanel from './components/AICopilotPanel';
 import BacktestPage from './components/pages/BacktestPage';
 import MarketPage from './components/pages/MarketPage';
 import PortfolioPage from './components/pages/PortfolioPage';
+import RegimeMLPage from './components/pages/RegimeMLPage';
 import RiskLabPage from './components/pages/RiskLabPage';
 import StrategyDetailPage from './components/pages/StrategyDetailPage';
 import StrategyScreenerPage from './components/pages/StrategyScreenerPage';
@@ -35,6 +36,7 @@ const INITIAL_FORM = {
 const NAV_ITEMS = [
   { key: 'market', label: 'Market' },
   { key: 'surface', label: 'Vol Surface' },
+  { key: 'regime_ml', label: 'Regime ML' },
   { key: 'screener', label: 'Strategy Screener' },
   { key: 'detail', label: 'Strategy Detail' },
   { key: 'risk', label: 'Risk Lab' },
@@ -392,11 +394,15 @@ export default function App() {
           selectedStrategyId={selectedStrategyId}
           onSelectStrategy={setSelectedStrategyId}
           market={market}
+          pipelineData={lastPipelineData}
           onPortfolioAdd={() => {
             // Auto-switch to portfolio page after adding
           }}
         />
       );
+    }
+    if (activePage === 'regime_ml') {
+      return <RegimeMLPage loading={loading} activeSnapshotId={activeSnapshotId} market={market} />;
     }
     if (activePage === 'detail') {
       return (

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
-import { portfolioAdd } from '../../api/client';
+import { aiStrategyPick, portfolioAdd } from '../../api/client';
 import { Panel, SnapshotGuard, formatNumber, formatRs, formatPctVal, NIFTY_LOT_SIZE } from './shared.jsx';
 
 const ADD_BTN_STYLE = {
@@ -15,6 +15,7 @@ export default function StrategyScreenerPage({
   selectedStrategyId,
   onSelectStrategy,
   market,
+  pipelineData,
   onPortfolioAdd,
 }) {
   const [strategyTypeFilter, setStrategyTypeFilter] = useState('all');
@@ -25,6 +26,10 @@ export default function StrategyScreenerPage({
   const [maxMargin, setMaxMargin] = useState(5000000);
   const [sortCol, setSortCol] = useState('overall_score');
   const [sortAsc, setSortAsc] = useState(false);
+  const [agentModel, setAgentModel] = useState('gemma3:1b');
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [agentResult, setAgentResult] = useState(null);
+  const [agentError, setAgentError] = useState('');
 
   const items = Array.isArray(strategies?.items) ? strategies.items : [];
   const selectedStrategy = items.find((item) => item.id === selectedStrategyId) || items[0] || null;
@@ -86,9 +91,63 @@ export default function StrategyScreenerPage({
   };
   const sortIndicator = (col) => sortCol === col ? (sortAsc ? ' \u25b2' : ' \u25bc') : '';
 
+  const runAgentPick = async () => {
+    setAgentError('');
+    setAgentLoading(true);
+    try {
+      const response = await aiStrategyPick(pipelineData || null, agentModel, 3);
+      const result = response?.data || response;
+      setAgentResult(result);
+      const pickedId = result?.primary?.id;
+      if (pickedId) {
+        onSelectStrategy?.(pickedId);
+      }
+    } catch (err) {
+      setAgentError(err?.message || 'Failed to run strategy picker.');
+    } finally {
+      setAgentLoading(false);
+    }
+  };
+
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
       <div className="page-screener-grid">
+        <Panel title="Agentic Strategy Selector">
+          <div style={{display: 'grid', gridTemplateColumns: '220px 180px 1fr', gap: 10, alignItems: 'center'}}>
+            <button type="button" className="action-btn accent" onClick={runAgentPick} disabled={agentLoading || loading}>
+              {agentLoading ? 'Selecting...' : 'Agent Pick Strategy'}
+            </button>
+            <select value={agentModel} onChange={(e) => setAgentModel(e.target.value)}>
+              <option value="gemma3:1b">Gemma 3 1B</option>
+              <option value="gemma:2b">Gemma 2B</option>
+              <option value="gemma3:4b">Gemma 3 4B</option>
+            </select>
+            <div style={{fontSize: 12, color: '#9ca3af'}}>
+              Separate from Copilot chat: picks strategy using current market snapshot + regime policy.
+            </div>
+          </div>
+          {agentError ? <div style={{marginTop: 8, color: '#ef4444'}}>{agentError}</div> : null}
+          {agentResult ? (
+            <div style={{marginTop: 10, display: 'grid', gap: 8}}>
+              <div style={{fontSize: 13}}>
+                <strong style={{color: '#22c55e'}}>Primary:</strong>{' '}
+                {agentResult?.primary?.strategy_type || '-'} | {agentResult?.primary?.legs_label || '-'} | Confidence {formatNumber(agentResult?.confidence, 1)}%
+              </div>
+              <div style={{fontSize: 12, color: '#d1d5db'}}>{agentResult?.summary || ''}</div>
+              {Array.isArray(agentResult?.why_bullets) && agentResult.why_bullets.length ? (
+                <ul style={{margin: 0, paddingLeft: 18, fontSize: 12, color: '#d1d5db'}}>
+                  {agentResult.why_bullets.map((line, idx) => <li key={idx}>{line}</li>)}
+                </ul>
+              ) : null}
+              {Array.isArray(agentResult?.alternatives) && agentResult.alternatives.length ? (
+                <div style={{fontSize: 12, color: '#9ca3af'}}>
+                  Alternatives: {agentResult.alternatives.map((x) => x?.strategy_type).filter(Boolean).join(', ')}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </Panel>
+
         <Panel title="Selected Strategy Summary" className="screener-summary-panel">
           <div className="screener-summary-grid">
             <Plot

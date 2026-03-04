@@ -265,10 +265,14 @@ export default function SurfacePage({
   surface,
   selectedExpiryIndex = 0,
   onExpiryIndexChange,
+  onRecalibrate,
+  canRecalibrate = false,
 }) {
   const [sliceExpiryIndex, setSliceExpiryIndex] = useState(0);
   const [sliceStrikeIndex, setSliceStrikeIndex] = useState(0);
   const [logMoneyness, setLogMoneyness] = useState(false);
+  const [recalibrating, setRecalibrating] = useState(false);
+  const [recalibrateMsg, setRecalibrateMsg] = useState('');
 
   const strikeGrid = Array.isArray(surface?.strike_grid) ? surface.strike_grid : [];
   const maturityGrid = Array.isArray(surface?.maturity_grid) ? surface.maturity_grid : [];
@@ -436,6 +440,81 @@ export default function SurfacePage({
       expiryFrequencyAxis,
     };
   }, [maturityGrid, strikeGrid, smoothedModelMatrix, sliceExpiryIndex]);
+  const calibrationDiagnostics = useMemo(() => {
+    const calib = surface?.calibration || null;
+    const params = calib?.parameters || {};
+    const v0 = Number(params?.v0);
+    const theta = Number(params?.theta);
+    const kappa = Number(params?.kappa);
+    const xi = Number(params?.xi ?? params?.sigma);
+    const rho = Number(params?.rho);
+    const rmse = Number(calib?.weighted_rmse);
+    const atmIv = Number(market?.atm_iv);
+
+    const toFinite = (v) => (Number.isFinite(v) ? v : null);
+    const instVol = Number.isFinite(v0) && v0 >= 0 ? Math.sqrt(v0) : null;
+    const longVol = Number.isFinite(theta) && theta >= 0 ? Math.sqrt(theta) : null;
+    const halfLifeDays = Number.isFinite(kappa) && kappa > 0 ? (Math.log(2) / kappa) * 252 : null;
+    const fellerLhs = Number.isFinite(kappa) && Number.isFinite(theta) ? 2 * kappa * theta : null;
+    const fellerRhs = Number.isFinite(xi) ? xi * xi : null;
+    const fellerOk = Number.isFinite(fellerLhs) && Number.isFinite(fellerRhs) ? fellerLhs > fellerRhs : null;
+
+    const crisis = Number.isFinite(atmIv) && atmIv > 0.35;
+    const bounds = crisis
+      ? {
+          v0: [0.005, 0.15],
+          theta: [0.005, 0.20],
+          kappa: [0.2, 8.0],
+          xi: [0.1, 2.0],
+          rho: [-0.99, -0.05],
+        }
+      : {
+          v0: [0.005, 0.05],
+          theta: [0.01, 0.08],
+          kappa: [0.3, 4.0],
+          xi: [0.2, 1.2],
+          rho: [-0.9, -0.2],
+        };
+
+    const inRange = (value, range) => Number.isFinite(value) && value >= range[0] && value <= range[1];
+    const checks = {
+      v0: inRange(v0, bounds.v0),
+      theta: inRange(theta, bounds.theta),
+      kappa: inRange(kappa, bounds.kappa),
+      xi: inRange(xi, bounds.xi),
+      rho: inRange(rho, bounds.rho),
+      feller: fellerOk === true,
+      halfLife: Number.isFinite(halfLifeDays) && halfLifeDays >= 5 && halfLifeDays <= 756,
+      rmse: Number.isFinite(rmse) && rmse <= 0.25,
+      converged: Boolean(calib?.converged),
+    };
+    const passCount = Object.values(checks).filter(Boolean).length;
+    const totalCount = Object.keys(checks).length;
+    const score = totalCount ? passCount / totalCount : 0;
+    const verdict = score >= 0.8 ? 'Good' : score >= 0.55 ? 'Usable' : 'Unstable';
+
+    return {
+      params: {
+        v0: toFinite(v0),
+        theta: toFinite(theta),
+        kappa: toFinite(kappa),
+        xi: toFinite(xi),
+        rho: toFinite(rho),
+      },
+      rmse: toFinite(rmse),
+      instVol: toFinite(instVol),
+      longVol: toFinite(longVol),
+      halfLifeDays: toFinite(halfLifeDays),
+      fellerLhs: toFinite(fellerLhs),
+      fellerRhs: toFinite(fellerRhs),
+      fellerOk,
+      checks,
+      passCount,
+      totalCount,
+      verdict,
+      crisis,
+    };
+  }, [surface, market]);
 
   useEffect(() => {
     setSliceExpiryIndex(selectedExpiryIndex);
@@ -752,16 +831,67 @@ export default function SurfacePage({
         </Panel>
         <Panel title="Heston Calibration">
           {surface?.calibration ? (
-            <div className="kv-grid two-col compact">
-              <div><span>Status</span><strong style={{color: surface.calibration.converged ? '#22c55e' : '#f43f5e'}}>{surface.calibration.converged ? 'Converged' : 'Not Converged'}</strong></div>
-              <div><span>Iterations</span><strong>{surface.calibration.iterations ?? '-'}</strong></div>
-              <div><span>Weighted RMSE</span><strong>{formatNumber(surface.calibration.weighted_rmse, 6)}</strong></div>
-              <div><span>v\u2080 (Inst. Var)</span><strong>{formatNumber(surface.calibration.parameters?.v0, 6)}</strong></div>
-              <div><span>\u03B8 (Long Var)</span><strong>{formatNumber(surface.calibration.parameters?.theta, 6)}</strong></div>
-              <div><span>\u03BA (Mean Rev)</span><strong>{formatNumber(surface.calibration.parameters?.kappa, 4)}</strong></div>
-              <div><span>\u03C3 (Vol of Vol)</span><strong>{formatNumber(surface.calibration.parameters?.sigma, 6)}</strong></div>
-              <div><span>\u03C1 (Correlation)</span><strong>{formatNumber(surface.calibration.parameters?.rho, 4)}</strong></div>
-            </div>
+            <>
+              <div className="kv-grid two-col compact">
+                <div><span>Status</span><strong style={{color: surface.calibration.converged ? '#22c55e' : '#f43f5e'}}>{surface.calibration.converged ? 'Converged' : 'Not Converged'}</strong></div>
+                <div><span>Iterations</span><strong>{surface.calibration.iterations ?? '-'}</strong></div>
+                <div><span>Weighted RMSE</span><strong>{formatNumber(calibrationDiagnostics.rmse, 6)}</strong></div>
+                <div><span>Calibration Verdict</span><strong style={{color: calibrationDiagnostics.verdict === 'Good' ? '#22c55e' : calibrationDiagnostics.verdict === 'Usable' ? '#f59e0b' : '#ef4444'}}>{calibrationDiagnostics.verdict} ({calibrationDiagnostics.passCount}/{calibrationDiagnostics.totalCount})</strong></div>
+                <div><span>v0 (Initial Variance)</span><strong>{formatNumber(calibrationDiagnostics.params.v0, 6)}</strong></div>
+                <div><span>theta (Long-Run Variance)</span><strong>{formatNumber(calibrationDiagnostics.params.theta, 6)}</strong></div>
+                <div><span>kappa (Mean Reversion)</span><strong>{formatNumber(calibrationDiagnostics.params.kappa, 4)}</strong></div>
+                <div><span>sigma / xi (Vol of Vol)</span><strong>{formatNumber(calibrationDiagnostics.params.xi, 6)}</strong></div>
+                <div><span>rho (Correlation)</span><strong>{formatNumber(calibrationDiagnostics.params.rho, 4)}</strong></div>
+                <div><span>Regime Bounds</span><strong>{calibrationDiagnostics.crisis ? 'Crisis' : 'Normal'}</strong></div>
+              </div>
+              <div className="kv-grid two-col compact" style={{ marginTop: 8 }}>
+                <div><span>Sqrt(v0) Instant Vol</span><strong>{calibrationDiagnostics.instVol != null ? `${(calibrationDiagnostics.instVol * 100).toFixed(2)}%` : '-'}</strong></div>
+                <div><span>Sqrt(theta) Long Vol</span><strong>{calibrationDiagnostics.longVol != null ? `${(calibrationDiagnostics.longVol * 100).toFixed(2)}%` : '-'}</strong></div>
+                <div><span>Half-Life</span><strong>{calibrationDiagnostics.halfLifeDays != null ? `${formatNumber(calibrationDiagnostics.halfLifeDays, 1)} days` : '-'}</strong></div>
+                <div><span>Feller Condition</span><strong style={{ color: calibrationDiagnostics.fellerOk ? '#22c55e' : '#ef4444' }}>{calibrationDiagnostics.fellerOk ? 'Pass' : 'Fail'}</strong></div>
+                <div><span>2*kappa*theta</span><strong>{formatNumber(calibrationDiagnostics.fellerLhs, 6)}</strong></div>
+                <div><span>xi^2</span><strong>{formatNumber(calibrationDiagnostics.fellerRhs, 6)}</strong></div>
+              </div>
+              <div style={{ marginTop: 6, color: '#94a3b8', fontSize: '0.68rem' }}>
+                Quality checks: parameter bounds, Feller condition, half-life (5 to 756 days), RMSE threshold, and convergence.
+              </div>
+              <div style={{ marginTop: 6, color: '#6b7280', fontSize: '0.64rem', lineHeight: 1.35 }}>
+                Normal bounds: v0 [0.005, 0.05], theta [0.01, 0.08], kappa [0.3, 4.0], sigma/xi [0.2, 1.2], rho [-0.9, -0.2].<br />
+                Crisis bounds (ATM IV &gt; 35%): v0 [0.005, 0.15], theta [0.005, 0.20], kappa [0.2, 8.0], sigma/xi [0.1, 2.0], rho [-0.99, -0.05].
+              </div>
+              {calibrationDiagnostics.verdict === 'Unstable' ? (
+                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={!canRecalibrate || recalibrating}
+                    onClick={async () => {
+                      if (!onRecalibrate) return;
+                      setRecalibrating(true);
+                      setRecalibrateMsg('');
+                      try {
+                        await onRecalibrate();
+                        setRecalibrateMsg('Recalibration completed.');
+                      } catch (error) {
+                        setRecalibrateMsg(error?.message || 'Recalibration failed.');
+                      } finally {
+                        setRecalibrating(false);
+                      }
+                    }}
+                  >
+                    {recalibrating ? 'Recalibrating...' : 'Recalibrate'}
+                  </button>
+                  <span style={{ color: '#9ca3af', fontSize: '0.68rem' }}>
+                    {canRecalibrate ? 'Use this when verdict is unstable.' : 'Live data id required for recalibration.'}
+                  </span>
+                </div>
+              ) : null}
+              {recalibrateMsg ? (
+                <div style={{ marginTop: 6, color: recalibrateMsg.toLowerCase().includes('failed') ? '#ef4444' : '#22c55e', fontSize: '0.68rem' }}>
+                  {recalibrateMsg}
+                </div>
+              ) : null}
+            </>
           ) : (
             <p style={{color:'#6b7280', fontSize:'0.75rem'}}>Run pipeline to see calibration parameters.</p>
           )}

@@ -163,6 +163,7 @@ class OrchestratorAgent:
         query: str,
         agent_name: Optional[str] = None,
         pipeline_data: Optional[Dict[str, Any]] = None,
+        model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Main chat interface. Routes query to appropriate agent(s) and returns response.
@@ -209,7 +210,7 @@ class OrchestratorAgent:
             target_agents,
         )
 
-        response_text = primary_agent.run(context)
+        response_text = primary_agent.run(context, model_id=model_id)
 
         self._conversation_history.append(AgentMessage(role="user", text=query))
         self._conversation_history.append(AgentMessage(role="model", text=response_text))
@@ -226,6 +227,7 @@ class OrchestratorAgent:
         query: str,
         agent_name: Optional[str] = None,
         pipeline_data: Optional[Dict[str, Any]] = None,
+        model_id: Optional[str] = None,
     ):
         """
         Streaming chat interface. Yields dict chunks with partial response text.
@@ -261,7 +263,7 @@ class OrchestratorAgent:
         }
 
         full_response = []
-        for chunk in primary_agent.run_streaming(context):
+        for chunk in primary_agent.run_streaming(context, model_id=model_id):
             full_response.append(chunk)
             yield {
                 "agent": primary_agent.name,
@@ -281,7 +283,11 @@ class OrchestratorAgent:
             "done": True,
         }
 
-    def generate_briefing(self, pipeline_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def generate_briefing(
+        self,
+        pipeline_data: Optional[Dict[str, Any]] = None,
+        model_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Generate a comprehensive market briefing by consulting all key agents.
         Returns structured briefing with sections from each agent.
@@ -301,7 +307,7 @@ class OrchestratorAgent:
         briefing["market_intel"] = {
             "agent": "market_intel",
             "role": self._agents["market_intel"].role,
-            "analysis": self._agents["market_intel"].run(market_context, temperature=0.2),
+            "analysis": self._agents["market_intel"].run(market_context, temperature=0.2, model_id=model_id),
         }
 
         # 2. Calibration Check
@@ -309,7 +315,7 @@ class OrchestratorAgent:
         briefing["calibration"] = {
             "agent": "calibration_monitor",
             "role": self._agents["calibration_monitor"].role,
-            "analysis": self._agents["calibration_monitor"].run(cal_context, temperature=0.2),
+            "analysis": self._agents["calibration_monitor"].run(cal_context, temperature=0.2, model_id=model_id),
         }
 
         # 3. Strategy Recommendation
@@ -317,7 +323,7 @@ class OrchestratorAgent:
         briefing["strategy"] = {
             "agent": "strategy_advisor",
             "role": self._agents["strategy_advisor"].role,
-            "analysis": self._agents["strategy_advisor"].run(strat_context, temperature=0.3),
+            "analysis": self._agents["strategy_advisor"].run(strat_context, temperature=0.3, model_id=model_id),
         }
 
         # 4. Risk Assessment
@@ -325,7 +331,7 @@ class OrchestratorAgent:
         briefing["risk"] = {
             "agent": "risk_analyst",
             "role": self._agents["risk_analyst"].role,
-            "analysis": self._agents["risk_analyst"].run(risk_context, temperature=0.2),
+            "analysis": self._agents["risk_analyst"].run(risk_context, temperature=0.2, model_id=model_id),
         }
 
         # 5. Volatility Surface Deep-Dive
@@ -333,7 +339,7 @@ class OrchestratorAgent:
         briefing["vol_surface"] = {
             "agent": "vol_surface",
             "role": self._agents["vol_surface"].role,
-            "analysis": self._agents["vol_surface"].run(vol_context, temperature=0.2),
+            "analysis": self._agents["vol_surface"].run(vol_context, temperature=0.2, model_id=model_id),
         }
 
         self._logger.info("ORCHESTRATOR_BRIEFING | complete | sections=%d", len(briefing))

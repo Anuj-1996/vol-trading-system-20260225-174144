@@ -65,11 +65,13 @@ class GeminiClient:
         temperature: float = 0.4,
         max_output_tokens: int = 4096,
         history: Optional[List[Dict[str, str]]] = None,
+        model_id: Optional[str] = None,
     ) -> str:
+        selected_model = (model_id or self._model_id).strip()
         messages = self._build_messages(system_instruction, user_prompt, history)
 
         payload = {
-            "model": self._model_id,
+            "model": selected_model,
             "messages": messages,
             "stream": False,
             "options": {
@@ -83,7 +85,7 @@ class GeminiClient:
             try:
                 self._logger.info(
                     "OLLAMA_REQUEST | model=%s | attempt=%d | prompt_len=%d",
-                    self._model_id,
+                    selected_model,
                     attempt,
                     len(user_prompt),
                 )
@@ -91,7 +93,7 @@ class GeminiClient:
                 text = result.get("message", {}).get("content", "")
                 self._logger.info(
                     "OLLAMA_RESPONSE | model=%s | response_len=%d | attempt=%d",
-                    self._model_id,
+                    selected_model,
                     len(text),
                     attempt,
                 )
@@ -119,12 +121,14 @@ class GeminiClient:
         temperature: float = 0.4,
         max_output_tokens: int = 4096,
         history: Optional[List[Dict[str, str]]] = None,
+        model_id: Optional[str] = None,
     ):
         """Stream response chunks from Ollama. Yields text strings."""
+        selected_model = (model_id or self._model_id).strip()
         messages = self._build_messages(system_instruction, user_prompt, history)
 
         payload = {
-            "model": self._model_id,
+            "model": selected_model,
             "messages": messages,
             "stream": True,
             "options": {
@@ -135,7 +139,7 @@ class GeminiClient:
 
         self._logger.info(
             "OLLAMA_STREAM_REQUEST | model=%s | prompt_len=%d",
-            self._model_id,
+            selected_model,
             len(user_prompt),
         )
 

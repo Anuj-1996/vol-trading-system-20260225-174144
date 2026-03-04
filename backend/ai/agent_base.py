@@ -73,7 +73,7 @@ class BaseAgent(ABC):
         containing only the data this agent needs.
         """
 
-    def run(self, context: AgentContext, temperature: float = 0.3) -> str:
+    def run(self, context: AgentContext, temperature: float = 0.3, model_id: Optional[str] = None) -> str:
         """
         Execute the agent: build prompt from context, call LLM, return response.
         """
@@ -95,6 +95,7 @@ class BaseAgent(ABC):
             temperature=temperature,
             max_output_tokens=4096,
             history=history_dicts,
+            model_id=model_id,
         )
 
         self._history.append(AgentMessage(role="user", text=user_prompt))
@@ -107,7 +108,7 @@ class BaseAgent(ABC):
         )
         return response
 
-    def run_streaming(self, context: AgentContext, temperature: float = 0.3):
+    def run_streaming(self, context: AgentContext, temperature: float = 0.3, model_id: Optional[str] = None):
         """
         Execute the agent with streaming response. Yields text chunks.
         """
@@ -130,6 +131,7 @@ class BaseAgent(ABC):
             temperature=temperature,
             max_output_tokens=4096,
             history=history_dicts,
+            model_id=model_id,
         ):
             full_response.append(chunk)
             yield chunk

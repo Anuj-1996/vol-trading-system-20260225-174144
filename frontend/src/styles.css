@@ -563,6 +563,21 @@ textarea {
   font-size: 0.72rem;
 }
 
+.btn-primary {
+  background: #7c2d12;
+  border: 1px solid #f59e0b;
+  color: #f8fafc;
+  padding: 6px 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .table-wrap {
   overflow-x: auto;
 }

@@ -4,7 +4,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -21,6 +21,7 @@ from ..data.repository import OptionChainRepository
 from ..evaluation.fragility_engine import FragilityEngine
 from ..evaluation.ranking_engine import RankedStrategy, RankingEngine
 from ..evaluation.static_evaluator import StaticEvaluationEngine
+from ..exceptions import CalibrationError
 from ..logger import get_logger
 from ..regime.regime_classifier import RegimeClassifier
 from ..simulation.dynamic_hedge import DynamicHedgingEngine, HedgeMode
@@ -224,9 +225,9 @@ class StrategyEngineService:
         filtered = self._liquidity_filter.filter_records(records=raw_records, spot=spot)
         surface = self._surface_builder.build_surface(records=filtered)
 
-        calibration_result = self._calibrator.calibrate(
-            market_surface=surface,
-            filtered_records=filtered,
+        calibration_result, _, _, _ = self._calibrate_with_retries(
+            surface=surface,
+            filtered=filtered,
             spot=spot,
             rate=request.risk_free_rate,
             dividend_yield=request.dividend_yield,
@@ -304,7 +305,10 @@ class StrategyEngineService:
             regime_weights=regime.ranking_weights,
         )
 
-        model_iv_matrix = model_iv_for_pricing  # reuse – already computed above
+        model_iv_matrix = self._sanitize_model_surface_matrix(
+            model_iv_matrix=model_iv_for_pricing,
+            market_iv_matrix=surface.implied_vol_matrix,
+        )
         residual_iv_matrix = model_iv_matrix - surface.implied_vol_matrix
         oi_profile = self._build_open_interest_profile(
             filtered_records=filtered,
@@ -323,7 +327,12 @@ class StrategyEngineService:
                 atm_market_iv = iv_val
                 chosen_near_index = int(mi)
                 break
-        atm_model_iv = float(model_iv_matrix[chosen_near_index, atm_index])
+        atm_model_iv = self._sanitize_atm_model_iv(
+            model_iv_matrix=model_iv_matrix,
+            maturity_index=chosen_near_index,
+            strike_index=atm_index,
+            atm_market_iv=atm_market_iv,
+        )
         # Fallback: if still zero, use the model IV
         if atm_market_iv < 1e-6:
             atm_market_iv = atm_model_iv
@@ -514,6 +523,112 @@ class StrategyEngineService:
     def _variance_to_annual_vol(sigma2: np.ndarray) -> np.ndarray:
         safe = np.maximum(sigma2, 1e-12)
         return np.sqrt(safe * 252.0)
+
+    def _sanitize_atm_model_iv(
+        self,
+        model_iv_matrix: np.ndarray,
+        maturity_index: int,
+        strike_index: int,
+        atm_market_iv: float,
+    ) -> float:
+        """
+        Robust ATM model IV extraction to avoid single-point numerical spikes.
+        """
+        if model_iv_matrix is None or np.size(model_iv_matrix) == 0:
+            return max(float(atm_market_iv), 0.01)
+
+        row = np.asarray(model_iv_matrix[int(maturity_index)], dtype=float)
+        if row.size == 0:
+            return max(float(atm_market_iv), 0.01)
+
+        raw = float(row[int(strike_index)]) if 0 <= int(strike_index) < row.size else np.nan
+
+        # Neighborhood median around ATM strike (robust against isolated spikes).
+        left = max(0, int(strike_index) - 2)
+        right = min(row.size, int(strike_index) + 3)
+        local = row[left:right]
+        local_valid = local[np.isfinite(local) & (local > 0.01) & (local < 3.0)]
+        global_valid = row[np.isfinite(row) & (row > 0.01) & (row < 3.0)]
+        robust = float(np.median(local_valid)) if local_valid.size else (float(np.median(global_valid)) if global_valid.size else np.nan)
+
+        candidate = raw if np.isfinite(raw) and raw > 0 else robust
+        if not np.isfinite(candidate):
+            candidate = float(atm_market_iv) if np.isfinite(atm_market_iv) and atm_market_iv > 0 else 0.2
+
+        # Bound to a practical range and relative to market ATM IV when available.
+        lower_abs, upper_abs = 0.01, 3.0
+        if np.isfinite(atm_market_iv) and atm_market_iv > 1e-8:
+            lower_rel = max(lower_abs, 0.50 * float(atm_market_iv))
+            upper_rel = min(upper_abs, 2.00 * float(atm_market_iv))
+        else:
+            lower_rel, upper_rel = lower_abs, upper_abs
+
+        adjusted = candidate
+        if adjusted < lower_rel or adjusted > upper_rel:
+            if np.isfinite(robust):
+                adjusted = robust
+            adjusted = float(np.clip(adjusted, lower_rel, upper_rel))
+
+        if np.isfinite(raw) and abs(adjusted - raw) > 1e-6:
+            self._logger.warning(
+                "ATM_MODEL_IV_SANITIZED | raw=%.6f | adjusted=%.6f | market=%.6f | maturity_idx=%d | strike_idx=%d",
+                raw,
+                adjusted,
+                float(atm_market_iv) if np.isfinite(atm_market_iv) else float("nan"),
+                int(maturity_index),
+                int(strike_index),
+            )
+
+        return float(np.clip(adjusted, lower_abs, upper_abs))
+
+    def _sanitize_model_surface_matrix(
+        self,
+        model_iv_matrix: np.ndarray,
+        market_iv_matrix: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Stabilize model IV surface for reporting/visualization.
+        - Replace invalid values
+        - Bound each cell relative to market IV
+        - Light smoothing across strikes to remove numerical spikes
+        """
+        model = np.asarray(model_iv_matrix, dtype=float).copy()
+        market = np.asarray(market_iv_matrix, dtype=float)
+        if model.ndim != 2 or market.shape != model.shape:
+            return model
+
+        valid_model = model[np.isfinite(model) & (model > 0.01) & (model < 3.0)]
+        fallback = float(np.median(valid_model)) if valid_model.size else 0.25
+
+        rows, cols = model.shape
+        cleaned = np.zeros_like(model)
+        for r in range(rows):
+            for c in range(cols):
+                mkt = float(market[r, c]) if np.isfinite(market[r, c]) else np.nan
+                val = float(model[r, c]) if np.isfinite(model[r, c]) else np.nan
+
+                if not np.isfinite(val) or val <= 0:
+                    val = mkt if np.isfinite(mkt) and mkt > 0 else fallback
+
+                if np.isfinite(mkt) and mkt > 1e-8:
+                    # Keep model in a practical envelope around observed market IV.
+                    lower = max(0.01, 0.50 * mkt)
+                    upper = min(1.50, 2.00 * mkt)
+                    val = float(np.clip(val, lower, upper))
+                else:
+                    val = float(np.clip(val, 0.01, 1.50))
+
+                cleaned[r, c] = val
+
+        # Smooth each maturity row lightly across strikes.
+        smoothed = cleaned.copy()
+        for r in range(rows):
+            row = cleaned[r, :]
+            padded = np.pad(row, (1, 1), mode="edge")
+            ma3 = (padded[:-2] + padded[1:-1] + padded[2:]) / 3.0
+            smoothed[r, :] = 0.65 * row + 0.35 * ma3
+
+        return smoothed
 
     @staticmethod
     def _rolling_normalize_100(series: pd.Series, window: int = 45) -> pd.Series:
@@ -1034,6 +1149,231 @@ class StrategyEngineService:
         )
         return selected
 
+    @staticmethod
+    def _normal_calibration_bounds() -> Tuple[Tuple[float, float], ...]:
+        return (
+            (0.3, 4.0),     # kappa
+            (0.01, 0.08),   # theta
+            (0.2, 1.2),     # xi
+            (-0.9, -0.2),   # rho
+            (0.005, 0.05),  # v0
+        )
+
+    @staticmethod
+    def _crisis_calibration_bounds() -> Tuple[Tuple[float, float], ...]:
+        return (
+            (0.2, 8.0),      # kappa
+            (0.005, 0.20),   # theta
+            (0.1, 2.0),      # xi
+            (-0.99, -0.05),  # rho
+            (0.005, 0.15),   # v0
+        )
+
+    @staticmethod
+    def _guess_from_dict(initial_guess: Optional[Dict[str, float]]) -> Optional[Tuple[float, float, float, float, float]]:
+        if not initial_guess:
+            return None
+        return (
+            float(initial_guess.get("kappa", 1.5)),
+            float(initial_guess.get("theta", 0.04)),
+            float(initial_guess.get("xi", 0.4)),
+            float(initial_guess.get("rho", -0.6)),
+            float(initial_guess.get("v0", 0.04)),
+        )
+
+    @staticmethod
+    def _apply_param_bounds_override(
+        base_bounds: Tuple[Tuple[float, float], ...],
+        param_bounds: Optional[Dict[str, List[float]]],
+    ) -> Tuple[Tuple[float, float], ...]:
+        if not param_bounds:
+            return base_bounds
+        order = ["kappa", "theta", "xi", "rho", "v0"]
+        bounds = list(base_bounds)
+        for idx, name in enumerate(order):
+            if name not in param_bounds:
+                continue
+            override = param_bounds[name]
+            if not isinstance(override, (list, tuple)) or len(override) != 2:
+                continue
+            lo, hi = float(override[0]), float(override[1])
+            if lo >= hi:
+                continue
+            bounds[idx] = (lo, hi)
+        return tuple(bounds)
+
+    @staticmethod
+    def _clamp_guess_to_bounds(
+        guess: Tuple[float, float, float, float, float],
+        bounds: Tuple[Tuple[float, float], ...],
+    ) -> Tuple[float, float, float, float, float]:
+        clamped = []
+        for idx, value in enumerate(guess):
+            lo, hi = bounds[idx]
+            eps = 1e-6 * max(1.0, abs(hi))
+            clamped.append(float(np.clip(value, lo + eps, hi - eps)))
+        return tuple(clamped)
+
+    @staticmethod
+    def _estimate_atm_market_iv(surface: Any, spot: float) -> float:
+        try:
+            strikes = np.asarray(surface.strike_grid, dtype=float)
+            matrix = np.asarray(surface.implied_vol_matrix, dtype=float)
+            maturities = np.asarray(surface.maturity_grid, dtype=float)
+        except Exception:
+            return 0.2
+        if strikes.size == 0 or matrix.size == 0:
+            return 0.2
+        atm_idx = int(np.argmin(np.abs(strikes - float(spot))))
+        maturity_order = np.argsort(maturities)
+        for mi in maturity_order:
+            value = float(matrix[int(mi), atm_idx])
+            if np.isfinite(value) and value > 1e-6:
+                return value
+        flat = matrix[np.isfinite(matrix) & (matrix > 1e-6)]
+        return float(np.median(flat)) if flat.size else 0.2
+
+    @staticmethod
+    def _calibration_is_stable(
+        calibration_result: Any,
+        bounds: Tuple[Tuple[float, float], ...],
+    ) -> bool:
+        params = calibration_result.parameters
+        rmse = float(calibration_result.metrics.weighted_rmse)
+        feller_gap = float(calibration_result.metrics.feller_gap)
+        checks = [
+            bool(calibration_result.converged),
+            np.isfinite(rmse) and rmse <= 0.25,
+            np.isfinite(feller_gap) and feller_gap > 0.0,
+            bounds[0][0] <= params.kappa <= bounds[0][1],
+            bounds[1][0] <= params.theta <= bounds[1][1],
+            bounds[2][0] <= params.xi <= bounds[2][1],
+            bounds[3][0] <= params.rho <= bounds[3][1],
+            bounds[4][0] <= params.v0 <= bounds[4][1],
+        ]
+        return bool(all(checks))
+
+    @staticmethod
+    def _calibration_score(
+        calibration_result: Any,
+        bounds: Tuple[Tuple[float, float], ...],
+    ) -> float:
+        params = calibration_result.parameters
+        rmse = float(calibration_result.metrics.weighted_rmse)
+        feller_gap = float(calibration_result.metrics.feller_gap)
+        score = rmse if np.isfinite(rmse) else 1e6
+        if not calibration_result.converged:
+            score += 0.5
+        if not np.isfinite(feller_gap) or feller_gap <= 0.0:
+            score += 0.5
+        penalties = [
+            (params.kappa, bounds[0]),
+            (params.theta, bounds[1]),
+            (params.xi, bounds[2]),
+            (params.rho, bounds[3]),
+            (params.v0, bounds[4]),
+        ]
+        for value, (lo, hi) in penalties:
+            if value < lo:
+                score += 0.2 + abs(lo - value)
+            elif value > hi:
+                score += 0.2 + abs(value - hi)
+        return float(score)
+
+    def _calibrate_with_retries(
+        self,
+        surface: Any,
+        filtered: List[Any],
+        spot: float,
+        rate: float,
+        dividend_yield: float,
+        initial_guess: Optional[Dict[str, float]] = None,
+        param_bounds: Optional[Dict[str, List[float]]] = None,
+    ) -> Tuple[Any, Tuple[float, float, float, float, float], Tuple[Tuple[float, float], ...], bool]:
+        atm_iv = self._estimate_atm_market_iv(surface, spot)
+        crisis = bool(np.isfinite(atm_iv) and atm_iv > 0.35)
+        bounds = self._crisis_calibration_bounds() if crisis else self._normal_calibration_bounds()
+        bounds = self._apply_param_bounds_override(bounds, param_bounds)
+
+        atm_var = float(np.clip(atm_iv * atm_iv, bounds[4][0], bounds[1][1]))
+        seed_center = tuple((lo + hi) / 2.0 for lo, hi in bounds)
+        seed_market = (
+            1.6 if crisis else 1.2,
+            float(np.clip(atm_var, bounds[1][0], bounds[1][1])),
+            0.65 if crisis else 0.45,
+            -0.65,
+            float(np.clip(atm_var, bounds[4][0], bounds[4][1])),
+        )
+        seed_conservative = (0.9, 0.03, 0.35, -0.5, 0.03)
+        user_seed = self._guess_from_dict(initial_guess)
+
+        seeds: List[Tuple[float, float, float, float, float]] = []
+        for candidate in [user_seed, seed_market, seed_center, seed_conservative]:
+            if candidate is None:
+                continue
+            clamped = self._clamp_guess_to_bounds(candidate, bounds)
+            if clamped not in seeds:
+                seeds.append(clamped)
+
+        best_result = None
+        best_seed = seeds[0] if seeds else seed_market
+        best_score = float("inf")
+        last_error: Optional[Exception] = None
+
+        for attempt_idx, seed in enumerate(seeds, start=1):
+            try:
+                result = self._calibrator.calibrate(
+                    market_surface=surface,
+                    filtered_records=filtered,
+                    spot=spot,
+                    rate=rate,
+                    dividend_yield=dividend_yield,
+                    initial_guess=seed,
+                    param_bounds=bounds,
+                )
+            except Exception as exc:
+                last_error = exc
+                self._logger.warning(
+                    "CALIBRATION_ATTEMPT_FAILED | attempt=%d/%d | seed=%s | error=%s",
+                    attempt_idx,
+                    len(seeds),
+                    seed,
+                    exc,
+                )
+                continue
+
+            score = self._calibration_score(result, bounds)
+            if score < best_score:
+                best_score = score
+                best_result = result
+                best_seed = seed
+
+            self._logger.info(
+                "CALIBRATION_ATTEMPT | attempt=%d/%d | rmse=%.6f | converged=%s | score=%.6f",
+                attempt_idx,
+                len(seeds),
+                float(result.metrics.weighted_rmse),
+                bool(result.converged),
+                score,
+            )
+            if self._calibration_is_stable(result, bounds):
+                self._logger.info("CALIBRATION_ATTEMPT_ACCEPTED | attempt=%d", attempt_idx)
+                return result, seed, bounds, crisis
+
+        if best_result is not None:
+            self._logger.warning(
+                "CALIBRATION_BEST_EFFORT | rmse=%.6f | converged=%s | score=%.6f",
+                float(best_result.metrics.weighted_rmse),
+                bool(best_result.converged),
+                best_score,
+            )
+            return best_result, best_seed, bounds, crisis
+
+        raise CalibrationError(
+            message="All calibration attempts failed",
+            context={"error": str(last_error) if last_error else "unknown"},
+        )
+
     def _build_model_surface_matrix(
         self,
         spot: float,
@@ -1160,9 +1500,9 @@ class StrategyEngineService:
         filtered = self._liquidity_filter.filter_records(records=raw_records, spot=request.spot)
         surface = self._surface_builder.build_surface(records=filtered)
 
-        calibration_result = self._calibrator.calibrate(
-            market_surface=surface,
-            filtered_records=filtered,
+        calibration_result, _, _, _ = self._calibrate_with_retries(
+            surface=surface,
+            filtered=filtered,
             spot=request.spot,
             rate=request.risk_free_rate,
             dividend_yield=request.dividend_yield,
@@ -1244,7 +1584,10 @@ class StrategyEngineService:
             regime_weights=regime.ranking_weights,
         )
 
-        model_iv_matrix = model_iv_for_pricing  # already computed above
+        model_iv_matrix = self._sanitize_model_surface_matrix(
+            model_iv_matrix=model_iv_for_pricing,
+            market_iv_matrix=surface.implied_vol_matrix,
+        )
         residual_iv_matrix = model_iv_matrix - surface.implied_vol_matrix
         oi_profile = self._build_open_interest_profile(
             filtered_records=filtered,
@@ -1276,7 +1619,12 @@ class StrategyEngineService:
                 atm_market_iv = iv_val
                 chosen_near_index = int(mi)
                 break
-        atm_model_iv = float(model_iv_matrix[chosen_near_index, atm_index])
+        atm_model_iv = self._sanitize_atm_model_iv(
+            model_iv_matrix=model_iv_matrix,
+            maturity_index=chosen_near_index,
+            strike_index=atm_index,
+            atm_market_iv=atm_market_iv,
+        )
         if atm_market_iv < 1e-6:
             atm_market_iv = atm_model_iv
 
@@ -1384,72 +1732,15 @@ class StrategyEngineService:
         filtered = self._liquidity_filter.filter_records(records=raw_records, spot=spot)
         surface = self._surface_builder.build_surface(records=filtered)
 
-        # Build initial guess tuple (kappa, theta, xi, rho, v0)
-        ig = initial_guess or {}
-        guess_tuple = (
-            ig.get("kappa", 1.5),
-            ig.get("theta", 0.04),
-            ig.get("xi", 0.4),
-            ig.get("rho", -0.6),
-            ig.get("v0", 0.04),
+        calibration_result, guess_tuple, custom_bounds, _ = self._calibrate_with_retries(
+            surface=surface,
+            filtered=filtered,
+            spot=spot,
+            rate=risk_free_rate,
+            dividend_yield=dividend_yield,
+            initial_guess=initial_guess,
+            param_bounds=param_bounds,
         )
-
-        # Override bounds if provided, otherwise auto-tighten around initial guess
-        default_bounds = CONFIG.calibration.param_bounds
-        if param_bounds:
-            bounds_list = list(default_bounds)
-            param_order = ["kappa", "theta", "xi", "rho", "v0"]
-            for i, name in enumerate(param_order):
-                if name in param_bounds:
-                    bounds_list[i] = tuple(param_bounds[name])
-            custom_bounds = tuple(bounds_list)
-        elif initial_guess:
-            # Auto-derive tighter bounds around the initial guess so the
-            # L-BFGS-B optimizer cannot escape to unrealistic boundary extremes.
-            auto_bounds = []
-            param_configs = [
-                # (name, guess_val, default_bound, lo_factor, hi_factor, abs_floor)
-                ("kappa", guess_tuple[0], default_bounds[0], 0.20, 3.0, 0.3),
-                ("theta", guess_tuple[1], default_bounds[1], 0.25, 3.0, 0.005),
-                ("xi",    guess_tuple[2], default_bounds[2], 0.25, 3.0, 0.05),
-                ("rho",   guess_tuple[3], default_bounds[3], None, None, None),  # special
-                ("v0",    guess_tuple[4], default_bounds[4], 0.25, 3.0, 0.005),
-            ]
-            for name, gv, (d_lo, d_hi), lo_f, hi_f, floor in param_configs:
-                if name == "rho":
-                    # rho is negative: tighten to [guess-0.25, min(guess+0.25, 0.0)]
-                    r_lo = max(d_lo, gv - 0.25)
-                    r_hi = min(d_hi, gv + 0.25)
-                    auto_bounds.append((r_lo, r_hi))
-                else:
-                    a_lo = max(d_lo, max(floor, gv * lo_f))
-                    a_hi = min(d_hi, gv * hi_f)
-                    if a_lo >= a_hi:
-                        a_lo, a_hi = d_lo, d_hi
-                    auto_bounds.append((a_lo, a_hi))
-            custom_bounds = tuple(auto_bounds)
-            self._logger.info(
-                "RECALIBRATE | auto-tightened bounds: %s", custom_bounds,
-            )
-        else:
-            custom_bounds = default_bounds
-
-        # Temporarily override bounds in config for the calibrator
-        original_bounds = CONFIG.calibration.param_bounds
-        try:
-            # Use object.__setattr__ since CalibrationConfig is frozen
-            object.__setattr__(CONFIG.calibration, 'param_bounds', custom_bounds)
-
-            calibration_result = self._calibrator.calibrate(
-                market_surface=surface,
-                filtered_records=filtered,
-                spot=spot,
-                rate=risk_free_rate,
-                dividend_yield=dividend_yield,
-                initial_guess=guess_tuple,
-            )
-        finally:
-            object.__setattr__(CONFIG.calibration, 'param_bounds', original_bounds)
 
         # Run downstream: simulation → strategies → evaluation → ranking
         maturity = float(np.max(surface.maturity_grid))
@@ -1522,7 +1813,10 @@ class StrategyEngineService:
             regime_weights=regime.ranking_weights,
         )
 
-        model_iv_matrix = model_iv_for_pricing
+        model_iv_matrix = self._sanitize_model_surface_matrix(
+            model_iv_matrix=model_iv_for_pricing,
+            market_iv_matrix=surface.implied_vol_matrix,
+        )
         residual_iv_matrix = model_iv_matrix - surface.implied_vol_matrix
         oi_profile = self._build_open_interest_profile(
             filtered_records=filtered,
@@ -1540,7 +1834,12 @@ class StrategyEngineService:
                 atm_market_iv = iv_val
                 chosen_near_index = int(mi)
                 break
-        atm_model_iv = float(model_iv_matrix[chosen_near_index, atm_index])
+        atm_model_iv = self._sanitize_atm_model_iv(
+            model_iv_matrix=model_iv_matrix,
+            maturity_index=chosen_near_index,
+            strike_index=atm_index,
+            atm_market_iv=atm_market_iv,
+        )
         if atm_market_iv < 1e-6:
             atm_market_iv = atm_model_iv
 

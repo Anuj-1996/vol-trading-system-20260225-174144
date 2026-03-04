@@ -502,20 +502,22 @@ export async function runLiveForSnapshot(symbol = 'NIFTY', pipelineParams = {}, 
 // AI Agent System
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function aiChat(query, agent = null, pipelineData = null) {
+export async function aiChat(query, agent = null, pipelineData = null, modelId = null) {
   const body = { query };
   if (agent) body.agent = agent;
   if (pipelineData) body.pipeline_data = pipelineData;
+  if (modelId) body.model_id = modelId;
   return request('/ai/chat', {
     method: 'POST',
     body: JSON.stringify(body),
   });
 }
 
-export async function aiChatStream(query, agent = null, pipelineData = null, onChunk = null) {
+export async function aiChatStream(query, agent = null, pipelineData = null, onChunk = null, modelId = null) {
   const body = { query };
   if (agent) body.agent = agent;
   if (pipelineData) body.pipeline_data = pipelineData;
+  if (modelId) body.model_id = modelId;
 
   const response = await fetch(`${API_BASE}/ai/chat/stream`, {
     method: 'POST',
@@ -569,9 +571,10 @@ export async function aiChatStream(query, agent = null, pipelineData = null, onC
   return { ...agentInfo, text: fullText };
 }
 
-export async function aiBriefing(pipelineData = null) {
+export async function aiBriefing(pipelineData = null, modelId = null) {
   const body = {};
   if (pipelineData) body.pipeline_data = pipelineData;
+  if (modelId) body.model_id = modelId;
   return request('/ai/briefing', {
     method: 'POST',
     body: JSON.stringify(body),

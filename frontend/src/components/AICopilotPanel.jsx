@@ -35,6 +35,12 @@ const QUICK_PROMPTS = [
   { label: 'Vol Surface', query: 'Deep analysis of the vol surface: IV rank, term structure, skew, and 3D surface topology', agent: 'vol_surface' },
 ];
 
+const MODEL_OPTIONS = [
+  { value: 'gemma:2b', label: 'Gemma 2B' },
+  { value: 'gemma3:1b', label: 'Gemma 3 1B' },
+  { value: 'gemma3:4b', label: 'Gemma 3 4B' },
+];
+
 function formatMarkdown(text) {
   if (!text) return '';
   // Strip recalibrate blocks from display
@@ -70,6 +76,7 @@ export default function AICopilotPanel({ pipelineData, isOpen, onToggle, dataId,
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState('auto');
+  const [selectedModelId, setSelectedModelId] = useState('gemma:2b');
   const [isSynced, setIsSynced] = useState(false);
   const [briefingLoading, setBriefingLoading] = useState(false);
   const [recalibrating, setRecalibrating] = useState(false);
@@ -139,10 +146,10 @@ export default function AICopilotPanel({ pipelineData, isOpen, onToggle, dataId,
                     text: update.text,
                     streaming: !update.done,
                   }
-                : msg,
+              : msg,
             ),
           );
-        });
+        }, selectedModelId);
       } catch (err) {
         setMessages((prev) =>
           prev.map((msg) =>
@@ -155,7 +162,7 @@ export default function AICopilotPanel({ pipelineData, isOpen, onToggle, dataId,
         setIsStreaming(false);
       }
     },
-    [input, isStreaming, selectedAgent, pipelineData],
+    [input, isStreaming, selectedAgent, pipelineData, selectedModelId],
   );
 
   const handleKeyDown = (e) => {
@@ -174,7 +181,7 @@ export default function AICopilotPanel({ pipelineData, isOpen, onToggle, dataId,
     ]);
 
     try {
-      const result = await aiBriefing(pipelineData);
+      const result = await aiBriefing(pipelineData, selectedModelId);
       const briefingData = result.data || result;
 
       for (const [key, section] of Object.entries(briefingData)) {
@@ -302,9 +309,21 @@ export default function AICopilotPanel({ pipelineData, isOpen, onToggle, dataId,
       <div className="ai-copilot-header">
         <div className="ai-header-left">
           <span className="ai-header-title">AI COPILOT</span>
-          <span className="ai-header-model">Gemma 2B · Ollama</span>
+          <span className="ai-header-model">
+            {(MODEL_OPTIONS.find((opt) => opt.value === selectedModelId)?.label || selectedModelId)} · Ollama
+          </span>
         </div>
         <div className="ai-header-right">
+          <select
+            className="ai-agent-select"
+            value={selectedModelId}
+            onChange={(e) => setSelectedModelId(e.target.value)}
+            title="Ollama model"
+          >
+            {MODEL_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
           <select
             className="ai-agent-select"
             value={selectedAgent}
@@ -356,7 +375,7 @@ export default function AICopilotPanel({ pipelineData, isOpen, onToggle, dataId,
           <div className="ai-empty-state">
             <div className="ai-empty-title">Multi-Agent AI System</div>
             <div className="ai-empty-desc">
-              7 specialist agents powered by Gemma 2B via Ollama (local).
+              7 specialist agents powered by local Ollama.
               Ask anything about the market, strategies, risk, calibration, vol surface, or execution.
             </div>
             <div className="ai-agent-grid">

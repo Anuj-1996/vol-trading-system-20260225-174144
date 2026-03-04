@@ -74,12 +74,20 @@ class AIChatPayload(BaseModel):
         default=None,
         description="Pipeline response to use as context (optional, uses last cached)",
     )
+    model_id: Optional[str] = Field(
+        default=None,
+        description="Optional Ollama model id override (e.g., gemma:2b, gemma3:4b)",
+    )
 
 
 class AIBriefingPayload(BaseModel):
     pipeline_data: Optional[dict] = Field(
         default=None,
         description="Pipeline response to generate briefing from",
+    )
+    model_id: Optional[str] = Field(
+        default=None,
+        description="Optional Ollama model id override for all briefing agents",
     )
 
 
@@ -271,6 +279,7 @@ def ai_chat(payload: AIChatPayload) -> dict:
             query=payload.query,
             agent_name=payload.agent,
             pipeline_data=payload.pipeline_data,
+            model_id=payload.model_id,
         )
         _logger.info("END | ai_chat | agent=%s", result.get("agent"))
         return {"status": "ok", "data": result}
@@ -290,6 +299,7 @@ def ai_chat_stream(payload: AIChatPayload):
                 query=payload.query,
                 agent_name=payload.agent,
                 pipeline_data=payload.pipeline_data,
+                model_id=payload.model_id,
             ):
                 yield f"data: {json.dumps(chunk_data)}\n\n"
         except Exception as exc:
@@ -304,7 +314,10 @@ def ai_briefing(payload: AIBriefingPayload) -> dict:
     """Generate a comprehensive market briefing from all agents."""
     _logger.info("START | ai_briefing")
     try:
-        result = _orchestrator.generate_briefing(pipeline_data=payload.pipeline_data)
+        result = _orchestrator.generate_briefing(
+            pipeline_data=payload.pipeline_data,
+            model_id=payload.model_id,
+        )
         _logger.info("END | ai_briefing")
         return {"status": "ok", "data": result}
     except Exception as exc:

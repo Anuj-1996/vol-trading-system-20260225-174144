@@ -55,6 +55,7 @@ class JointHestonCalibrator:
         rate: float,
         dividend_yield: float,
         initial_guess: Tuple[float, float, float, float, float] = (1.5, 0.04, 0.4, -0.6, 0.04),
+        param_bounds: Tuple[Tuple[float, float], ...] | None = None,
     ) -> CalibrationResult:
         self._logger.info("START | calibrate | expiries=%d", len(market_surface.expiry_list))
 
@@ -102,7 +103,7 @@ class JointHestonCalibrator:
             fun=objective_fn,
             x0=np.array(initial_guess, dtype=float),
             method="L-BFGS-B",
-            bounds=CONFIG.calibration.param_bounds,
+            bounds=param_bounds or CONFIG.calibration.param_bounds,
             callback=callback,
             options={
                 "maxiter": CONFIG.calibration.max_iterations,

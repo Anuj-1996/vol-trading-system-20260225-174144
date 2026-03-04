@@ -6,6 +6,7 @@ import {
   normalizeSnapshotModules,
   runLiveForSnapshot,
   aiSyncPipeline,
+  aiRecalibrate,
 } from './api/client';
 import AICopilotPanel from './components/AICopilotPanel';
 import BacktestPage from './components/pages/BacktestPage';
@@ -320,6 +321,42 @@ export default function App() {
 
   const calibrationStatusClass = market ? 'status-text-ok' : 'status-text-warn';
 
+  const applyRecalibratedData = (recalData) => {
+    const payload = recalData?.data || recalData;
+    if (!payload || !payload.market_overview || !payload.surface) {
+      throw new Error('Invalid recalibration payload received from backend.');
+    }
+    const updatedPayload = {
+      market_overview: payload.market_overview || null,
+      surface: payload.surface || null,
+      calibration: payload.calibration || null,
+      regime: payload.regime || null,
+      top_strategies: payload.top_strategies || [],
+    };
+    setLastPipelineData(updatedPayload);
+
+    const modules = normalizeSnapshotModules(payload);
+    setSnapshotData({
+      market: modules.market,
+      surface: modules.surface,
+      strategies: modules.strategies,
+      risk: modules.risk,
+      backtest: modules.backtest,
+      portfolio: modules.portfolio,
+      selectedStrategyId: modules.strategies?.items?.[0]?.id || null,
+    });
+  };
+
+  const handleQuickRecalibrate = async () => {
+    if (!liveMetadata?.data_id) {
+      throw new Error('No live data_id available for recalibration. Run live fetch first.');
+    }
+    const result = await aiRecalibrate(liveMetadata.data_id, null, null);
+    const recalData = result?.data || result;
+    applyRecalibratedData(recalData);
+    return recalData;
+  };
+
   const renderActivePage = () => {
     if (activePage === 'market') {
       return (
@@ -341,6 +378,8 @@ export default function App() {
           surface={surface}
           selectedExpiryIndex={selectedExpiryIndex}
           onExpiryIndexChange={(nextIndex) => setSelectedExpiry(String(nextIndex))}
+          onRecalibrate={handleQuickRecalibrate}
+          canRecalibrate={Boolean(liveMetadata?.data_id)}
         />
       );
     }
@@ -472,27 +511,7 @@ export default function App() {
         onToggle={() => setAiPanelOpen((prev) => !prev)}
         dataId={liveMetadata?.data_id || null}
         onRecalibrated={(recalData) => {
-          // Update pipeline data for AI agents
-          const updatedPayload = {
-            market_overview: recalData.market_overview || null,
-            surface: recalData.surface || null,
-            calibration: recalData.calibration || null,
-            regime: recalData.regime || null,
-            top_strategies: recalData.top_strategies || [],
-          };
-          setLastPipelineData(updatedPayload);
-
-          // Push recalibrated data into snapshot store so dashboard updates
-          const modules = normalizeSnapshotModules(recalData);
-          setSnapshotData({
-            market: modules.market,
-            surface: modules.surface,
-            strategies: modules.strategies,
-            risk: modules.risk,
-            backtest: modules.backtest,
-            portfolio: modules.portfolio,
-            selectedStrategyId: modules.strategies?.items?.[0]?.id || null,
-          });
+          applyRecalibratedData(recalData);
         }}
       />
     </div>

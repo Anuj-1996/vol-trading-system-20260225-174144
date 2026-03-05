@@ -2,6 +2,34 @@ import React, { useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
 
+/* ── KDE builder (Gaussian kernel density estimate) ── */
+function buildKde(values, steps = 160) {
+  if (!Array.isArray(values) || values.length < 2) return { x: [], y: [] };
+  const n = values.length;
+  const mean = values.reduce((a, v) => a + v, 0) / n;
+  const variance = values.reduce((a, v) => a + (v - mean) ** 2, 0) / Math.max(n - 1, 1);
+  const std = Math.sqrt(Math.max(variance, 1e-12));
+  const h = Math.max(1.06 * std * (n ** (-1 / 5)), 1e-6);
+  const pad = Math.max(std * 1.5, h * 3);
+  const xMin = Math.min(...values) - pad;
+  const xMax = Math.max(...values) + pad;
+  const dx = (xMax - xMin) / steps;
+  const invSqrt2Pi = 1 / Math.sqrt(2 * Math.PI);
+  const invNh = 1 / (n * h);
+  const x = [], y = [];
+  for (let i = 0; i <= steps; i++) {
+    const xi = xMin + dx * i;
+    let sum = 0;
+    for (let j = 0; j < n; j++) {
+      const u = (xi - values[j]) / h;
+      sum += Math.exp(-0.5 * u * u) * invSqrt2Pi;
+    }
+    x.push(xi);
+    y.push(invNh * sum);
+  }
+  return { x, y };
+}
+
 /**
  * Compute PnL change via Taylor expansion using actual Greeks:
  *   ΔPnL ≈ Δ·ΔS + ½Γ·(ΔS)² + V·Δσ + Θ·Δt
@@ -199,49 +227,56 @@ export default function RiskLabPage({ loading, activeSnapshotId, risk }) {
           />
         </Panel>
 
-        {pnlDist.length > 0 && (
-          <Panel title="Base PnL Distribution">
-            <Plot
-              data={[{
-                type: 'histogram',
-                x: pnlDist,
-                nbinsx: 80,
-                marker: { color: '#38bdf8', opacity: 0.75 },
-                name: 'PnL Dist',
-              },
-              ...(baseVar95 ? [{
-                type: 'scatter', mode: 'lines',
-                x: [baseVar95, baseVar95], y: [0, 1],
-                yaxis: 'y',
-                line: { color: '#f59e0b', width: 2, dash: 'dash' },
-                name: 'VaR 95',
-              }] : []),
-              ...(baseVar99 ? [{
-                type: 'scatter', mode: 'lines',
-                x: [baseVar99, baseVar99], y: [0, 1],
-                yaxis: 'y',
-                line: { color: '#ef4444', width: 2, dash: 'dash' },
-                name: 'VaR 99',
-              }] : []),
-              ]}
-              layout={{
-                height: 200,
-                margin: { l: 50, r: 20, b: 36, t: 10 },
-                paper_bgcolor: '#0a0f19',
-                plot_bgcolor: '#0a0f19',
-                font: { color: '#d1d5db', size: 11 },
-                xaxis: { title: 'PnL', gridcolor: '#1f2937' },
-                yaxis: { title: 'Count', gridcolor: '#1f2937' },
-                bargap: 0.02,
-                showlegend: true,
-                legend: { orientation: 'h', y: 1.15, font: { size: 9 } },
-              }}
-              config={{ displaylogo: false, responsive: true }}
-              style={{ width: '100%' }}
-              useResizeHandler
-            />
-          </Panel>
-        )}
+        {pnlDist.length > 0 && (() => {
+          const kde = buildKde(pnlDist);
+          const yMax = Math.max(...kde.y) * 1.1;
+          const varShapes = [];
+          const varAnnotations = [];
+          if (baseVar95) {
+            varShapes.push({ type: 'line', x0: -baseVar95, x1: -baseVar95, y0: 0, y1: yMax, line: { color: '#f59e0b', width: 2, dash: 'dash' } });
+            varAnnotations.push({ x: -baseVar95, y: yMax * 0.92, text: `VaR 95<br>${formatNumber(-baseVar95, 1)}`, showarrow: false, font: { color: '#f59e0b', size: 10 }, xanchor: 'right', xshift: -4 });
+          }
+          if (baseVar99) {
+            varShapes.push({ type: 'line', x0: -baseVar99, x1: -baseVar99, y0: 0, y1: yMax, line: { color: '#ef4444', width: 2, dash: 'dash' } });
+            varAnnotations.push({ x: -baseVar99, y: yMax * 0.78, text: `VaR 99<br>${formatNumber(-baseVar99, 1)}`, showarrow: false, font: { color: '#ef4444', size: 10 }, xanchor: 'right', xshift: -4 });
+          }
+          // Zero-line shape
+          varShapes.push({ type: 'line', x0: 0, x1: 0, y0: 0, y1: yMax, line: { color: '#6b7280', width: 1, dash: 'dot' } });
+
+          return (
+            <Panel title="Base PnL Distribution">
+              <Plot
+                data={[
+                  {
+                    type: 'scatter', mode: 'lines',
+                    x: kde.x, y: kde.y,
+                    line: { color: '#38bdf8', width: 2.5 },
+                    fill: 'tozeroy',
+                    fillcolor: 'rgba(56, 189, 248, 0.25)',
+                    name: 'PnL Density',
+                    hovertemplate: 'PnL: %{x:.1f}<br>Density: %{y:.6f}<extra></extra>',
+                  },
+                ]}
+                layout={{
+                  height: 240,
+                  margin: { l: 50, r: 20, b: 36, t: 10 },
+                  paper_bgcolor: '#0a0f19',
+                  plot_bgcolor: '#0a0f19',
+                  font: { color: '#d1d5db', size: 11 },
+                  xaxis: { title: 'PnL', gridcolor: '#1f2937', zerolinecolor: '#334155' },
+                  yaxis: { title: 'Density', gridcolor: '#1f2937', rangemode: 'tozero' },
+                  shapes: varShapes,
+                  annotations: varAnnotations,
+                  showlegend: true,
+                  legend: { orientation: 'h', y: 1.15, font: { size: 9 } },
+                }}
+                config={{ displaylogo: false, responsive: true }}
+                style={{ width: '100%' }}
+                useResizeHandler
+              />
+            </Panel>
+          );
+        })()}
       </div>
     </SnapshotGuard>
   );

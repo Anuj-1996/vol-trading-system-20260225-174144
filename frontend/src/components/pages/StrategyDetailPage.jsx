@@ -2,6 +2,34 @@ import React, { useMemo } from 'react';
 import Plot from 'react-plotly.js';
 import { Panel, SnapshotGuard, formatNumber, formatRs, formatPctVal } from './shared.jsx';
 
+/* ── KDE builder (Gaussian kernel density estimate) ── */
+function buildKde(values, steps = 160) {
+  if (!Array.isArray(values) || values.length < 2) return { x: [], y: [] };
+  const n = values.length;
+  const mean = values.reduce((a, v) => a + v, 0) / n;
+  const variance = values.reduce((a, v) => a + (v - mean) ** 2, 0) / Math.max(n - 1, 1);
+  const std = Math.sqrt(Math.max(variance, 1e-12));
+  const h = Math.max(1.06 * std * (n ** (-1 / 5)), 1e-6);
+  const pad = Math.max(std * 1.5, h * 3);
+  const xMin = Math.min(...values) - pad;
+  const xMax = Math.max(...values) + pad;
+  const dx = (xMax - xMin) / steps;
+  const invSqrt2Pi = 1 / Math.sqrt(2 * Math.PI);
+  const invNh = 1 / (n * h);
+  const x = [], y = [];
+  for (let i = 0; i <= steps; i++) {
+    const xi = xMin + dx * i;
+    let sum = 0;
+    for (let j = 0; j < n; j++) {
+      const u = (xi - values[j]) / h;
+      sum += Math.exp(-0.5 * u * u) * invSqrt2Pi;
+    }
+    x.push(xi);
+    y.push(invNh * sum);
+  }
+  return { x, y };
+}
+
 // ─── Helper: compute multi-leg intrinsic payoff at expiry ─────────────────
 function computeIntrinsicPayoff(spotAtExpiry, legs, netPremium) {
   let payoff = 0;
@@ -264,33 +292,49 @@ export default function StrategyDetailPage({ loading, activeSnapshotId, strategi
 
         {/* ── PnL Distribution ── */}
         <Panel title={`PnL Distribution${distStats ? ` (${distStats.count} paths)` : ''}`}>
-          <Plot
-            data={[
-              {
-                type: 'histogram', x: pnlDist, marker: { color: '#f59e0b', line: { color: '#b45309', width: 0.5 } },
-                nbinsx: 50, name: 'PnL', opacity: 0.85,
-              },
-              ...(var95 ? [{
-                type: 'scatter', mode: 'lines', x: [-var95, -var95], y: [0, pnlDist.length * 0.06],
-                line: { color: '#fb923c', width: 2, dash: 'dash' }, name: `VaR 95 (${formatNumber(-var95, 0)})`,
-              }] : []),
-              ...(var99 ? [{
-                type: 'scatter', mode: 'lines', x: [-var99, -var99], y: [0, pnlDist.length * 0.06],
-                line: { color: '#f43f5e', width: 2, dash: 'dash' }, name: `VaR 99 (${formatNumber(-var99, 0)})`,
-              }] : []),
-            ]}
-            layout={{
-              height: 260, margin: { l: 40, r: 12, b: 30, t: 18 },
-              ...DARK_LAYOUT,
-              xaxis: { title: 'PnL', gridcolor: '#1f2937' },
-              yaxis: { title: 'Frequency', gridcolor: '#1f2937' },
-              legend: { orientation: 'h', y: 1.12, font: { size: 9 } },
-              bargap: 0.03,
-            }}
-            config={{ displaylogo: false, responsive: true }}
-            style={{ width: '100%' }}
-            useResizeHandler
-          />
+          {(() => {
+            const kde = buildKde(pnlDist);
+            const yMax = kde.y.length ? Math.max(...kde.y) * 1.1 : 1;
+            const varShapes = [];
+            const varAnnotations = [];
+            if (var95) {
+              varShapes.push({ type: 'line', x0: -var95, x1: -var95, y0: 0, y1: yMax, line: { color: '#fb923c', width: 2, dash: 'dash' } });
+              varAnnotations.push({ x: -var95, y: yMax * 0.92, text: `VaR 95<br>${formatNumber(-var95, 1)}`, showarrow: false, font: { color: '#fb923c', size: 10 }, xanchor: 'right', xshift: -4 });
+            }
+            if (var99) {
+              varShapes.push({ type: 'line', x0: -var99, x1: -var99, y0: 0, y1: yMax, line: { color: '#f43f5e', width: 2, dash: 'dash' } });
+              varAnnotations.push({ x: -var99, y: yMax * 0.78, text: `VaR 99<br>${formatNumber(-var99, 1)}`, showarrow: false, font: { color: '#f43f5e', size: 10 }, xanchor: 'right', xshift: -4 });
+            }
+            varShapes.push({ type: 'line', x0: 0, x1: 0, y0: 0, y1: yMax, line: { color: '#6b7280', width: 1, dash: 'dot' } });
+            return (
+              <Plot
+                data={[
+                  {
+                    type: 'scatter', mode: 'lines',
+                    x: kde.x, y: kde.y,
+                    line: { color: '#f59e0b', width: 2.5 },
+                    fill: 'tozeroy',
+                    fillcolor: 'rgba(245, 158, 11, 0.25)',
+                    name: 'PnL Density',
+                    hovertemplate: 'PnL: %{x:.1f}<br>Density: %{y:.6f}<extra></extra>',
+                  },
+                ]}
+                layout={{
+                  height: 260, margin: { l: 40, r: 12, b: 30, t: 18 },
+                  ...DARK_LAYOUT,
+                  xaxis: { title: 'PnL', gridcolor: '#1f2937', zerolinecolor: '#334155' },
+                  yaxis: { title: 'Density', gridcolor: '#1f2937', rangemode: 'tozero' },
+                  shapes: varShapes,
+                  annotations: varAnnotations,
+                  showlegend: true,
+                  legend: { orientation: 'h', y: 1.12, font: { size: 9 } },
+                }}
+                config={{ displaylogo: false, responsive: true }}
+                style={{ width: '100%' }}
+                useResizeHandler
+              />
+            );
+          })()}
           {distStats && (
             <div style={{ display: 'flex', gap: 16, fontSize: 10, color: '#9ca3af', marginTop: 4, flexWrap: 'wrap' }}>
               <span>Mean: {formatNumber(distStats.mean, 2)}</span>

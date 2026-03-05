@@ -270,20 +270,46 @@ function interpolateTermValue(days, values, targetDay) {
   return null;
 }
 
-export default function MarketPage({ loading, activeSnapshotId, market, surface, selectedExpiryIndex = 0 }) {
+export default function MarketPage({ loading = false, activeSnapshotId = null, market = {}, surface = {}, selectedExpiryIndex = 0 }) {
   const [selectedModel, setSelectedModel] = useState('GARCH');
   const [scatterXKey, setScatterXKey] = useState('hv20');
   const [scatterYKey, setScatterYKey] = useState('iv_proxy');
   const [vrpBasis, setVrpBasis] = useState('atm_iv_rv20');
   const [vrpLogValues, setVrpLogValues] = useState(false);
+  const [strikeRange, setStrikeRange] = useState(500);
 
   const strikeGrid = Array.isArray(surface?.strike_grid) ? surface.strike_grid : [];
   const marketMatrix = Array.isArray(surface?.market_iv_matrix) ? surface.market_iv_matrix : [];
   const marketSlice = marketMatrix[selectedExpiryIndex] || marketMatrix[0] || [];
+  const spot = Number(market?.spot ?? 0);
+
+  // Build clean, sorted skew curve data
+  const sortedIndices = strikeGrid
+    .map((s, i) => ({ s: Number(s), i }))
+    .filter(({ s }) => Number.isFinite(s))
+    .sort((a, b) => a.s - b.s);
+  const sortedStrikes = sortedIndices.map(({ s }) => s);
+  const sortedIVs = sortedIndices.map(({ i }) => {
+    const v = Number(marketSlice[i]);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  });
+  // Simple 3-point moving average smoothing
+  const smoothedIVs = sortedIVs.map((v, idx, arr) => {
+    const vals = [arr[idx - 1], v, arr[idx + 1]].filter((x) => x != null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  });
+  // Auto-detect ATM as the strike closest to spot
+  const atmStrike = sortedStrikes.length && spot > 0
+    ? sortedStrikes.reduce((best, s) => Math.abs(s - spot) < Math.abs(best - spot) ? s : best, sortedStrikes[0])
+    : null;
+  const filteredPairs = sortedStrikes
+    .map((s, i) => ({ s, iv: smoothedIVs[i] }))
+    .filter(({ s, iv }) => iv != null && (atmStrike == null || (s >= atmStrike - strikeRange && s <= atmStrike + strikeRange)));
+  const filteredStrikeGrid = filteredPairs.map(({ s }) => s);
+  const filteredMarketSlice = filteredPairs.map(({ iv }) => iv);
   const termDays = Array.isArray(market?.term_structure_days) ? market.term_structure_days : [];
   const termMarketAtm = Array.isArray(market?.term_structure_market_atm) ? market.term_structure_market_atm : [];
   const termModelAtm = Array.isArray(market?.term_structure_model_atm) ? market.term_structure_model_atm : [];
-  const spot = Number(market?.spot ?? 0);
   const hasSingleExpiry = termDays.length <= 1;
   const history = market?.price_history || null;
   const hasHistory = Boolean(history && Array.isArray(history.dates) && history.dates.length > 2);
@@ -793,21 +819,69 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
             />
           </Panel>
           <Panel title="Skew Curve">
-            <Plot
-              data={[{ type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: marketSlice, line: { color: '#38bdf8', width: 2 } }]}
-              layout={{
-                height: 220,
-                margin: { l: 36, r: 12, b: 28, t: 22 },
-                paper_bgcolor: '#0a0f19',
-                plot_bgcolor: '#0a0f19',
-                font: { color: '#d1d5db', size: 11 },
-                xaxis: { title: 'Strike', gridcolor: '#1f2937' },
-                yaxis: { title: 'IV', gridcolor: '#1f2937' },
-              }}
-              config={{ displaylogo: false, responsive: true }}
-              style={{ width: '100%' }}
-              useResizeHandler
-            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '8px' }}>
+              <span style={{ color: '#9ca3af', fontSize: 12 }}>
+                ATM: <strong style={{ color: '#f59e0b' }}>{atmStrike != null ? atmStrike.toLocaleString() : '-'}</strong>
+                {spot > 0 && <span style={{ color: '#6b7280' }}> (Spot: {spot.toLocaleString()})</span>}
+              </span>
+              <label style={{ color: '#9ca3af', fontSize: 12 }}>
+                Range ±
+                <select value={strikeRange} onChange={(e) => setStrikeRange(Number(e.target.value))} style={{ marginLeft: '6px', background: '#1f2937', color: '#d1d5db', border: '1px solid #374151', borderRadius: 4, padding: '2px 6px' }}>
+                  <option value={500}>500</option>
+                  <option value={800}>800</option>
+                  <option value={1200}>1200</option>
+                  <option value={1500}>1500</option>
+                </select>
+              </label>
+            </div>
+            {(!filteredStrikeGrid || !filteredMarketSlice || filteredStrikeGrid.length === 0 || filteredMarketSlice.length === 0) ? (
+              <div style={{ color: '#ef4444', textAlign: 'center' }}>No data available for Skew Curve</div>
+            ) : (
+              <Plot
+                data={[
+                  {
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    x: filteredStrikeGrid,
+                    y: filteredMarketSlice,
+                    line: { color: '#38bdf8', width: 2 },
+                    name: 'IV Skew',
+                  },
+                ]}
+                layout={{
+                  height: 240,
+                  margin: { l: 36, r: 12, b: 28, t: 10 },
+                  paper_bgcolor: '#0a0f19',
+                  plot_bgcolor: '#0a0f19',
+                  font: { color: '#d1d5db', size: 11 },
+                  xaxis: { title: 'Strike', gridcolor: '#1f2937' },
+                  yaxis: { title: 'IV', gridcolor: '#1f2937', tickformat: '.2%' },
+                  shapes: atmStrike != null ? [{
+                    type: 'line',
+                    x0: atmStrike,
+                    x1: atmStrike,
+                    y0: 0,
+                    y1: 1,
+                    yref: 'paper',
+                    line: { color: '#f59e0b', width: 2, dash: 'dash' },
+                  }] : [],
+                  annotations: atmStrike != null ? [{
+                    x: atmStrike,
+                    y: 1,
+                    yref: 'paper',
+                    text: `ATM ${atmStrike.toLocaleString()}`,
+                    showarrow: false,
+                    font: { color: '#f59e0b', size: 10 },
+                    xanchor: 'left',
+                    yanchor: 'top',
+                  }] : [],
+                  showlegend: false,
+                }}
+                config={{ displaylogo: false, responsive: true }}
+                style={{ width: '100%' }}
+                useResizeHandler
+              />
+            )}
           </Panel>
           <Panel title="VRP Area Plot">
             <div className="filters-grid" style={{ gridTemplateColumns: '1fr' }}>
@@ -1136,3 +1210,5 @@ export default function MarketPage({ loading, activeSnapshotId, market, surface,
     </SnapshotGuard>
   );
 }
+
+

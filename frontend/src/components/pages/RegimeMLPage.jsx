@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef, useCallback } from 'react';
 import Plot from 'react-plotly.js';
 import { Panel, SnapshotGuard, formatNumber, formatPct } from './shared.jsx';
 
@@ -218,9 +218,93 @@ function buildConfusion(actual, pred, classes) {
   return { matrix: mat, acc: actual.length ? correct / actual.length : 0 };
 }
 
+/* ── Isolated 3-D scatter component ── keeps Plotly camera across parent re-renders ── */
+const AXIS_OPTS_3D = {
+  rv20:   { label: 'RV20',         get: (r) => r.rv20 },
+  rv60:   { label: 'RV60',         get: (r) => r.rv60 },
+  iv:     { label: 'IV Proxy',     get: (r) => r.iv },
+  hv20:   { label: 'HV20',         get: (r) => r.hv20 },
+  absRet: { label: '|Log Return|', get: (r) => r.absRet },
+  date:   { label: 'Date',         get: (r) => r.date },
+};
+
+const Scatter3DPlot = React.memo(function Scatter3DPlot({ rows, clusterLabels, xKey, yKey, zKey }) {
+  const cameraRef = useRef(null);
+  const xOpt = AXIS_OPTS_3D[xKey] || AXIS_OPTS_3D.rv20;
+  const yOpt = AXIS_OPTS_3D[yKey] || AXIS_OPTS_3D.iv;
+  const zOpt = AXIS_OPTS_3D[zKey] || AXIS_OPTS_3D.rv60;
+  const xVals = useMemo(() => rows.map((r) => xOpt.get(r)), [rows, xKey]); // eslint-disable-line
+  const yVals = useMemo(() => rows.map((r) => yOpt.get(r)), [rows, yKey]); // eslint-disable-line
+  const zVals = useMemo(() => rows.map((r) => zOpt.get(r)), [rows, zKey]); // eslint-disable-line
+  const k = Math.max(...clusterLabels) + 1;
+  const palette = ['#fef9c3','#fde047','#facc15','#f59e0b','#ea580c','#dc2626','#b91c1c','#7f1d1d'];
+  const fmtX = xKey === 'date' ? '' : ':.4f';
+  const fmtY = yKey === 'date' ? '' : ':.4f';
+  const fmtZ = zKey === 'date' ? '' : ':.4f';
+
+  const data = useMemo(() => {
+    const scatter = Array.from({ length: k }, (_, c) => {
+      const mask = clusterLabels.map((l, i) => l === c ? i : -1).filter((i) => i >= 0);
+      return {
+        type: 'scatter3d', mode: 'markers', name: `Cluster ${c}`,
+        x: mask.map((i) => xVals[i]), y: mask.map((i) => yVals[i]), z: mask.map((i) => zVals[i]),
+        marker: { size: 4, color: palette[Math.round(c * (palette.length - 1) / Math.max(k - 1, 1))], opacity: 0.85 },
+        hovertemplate: `${xOpt.label}: %{x${fmtX}}<br>${yOpt.label}: %{y${fmtY}}<br>${zOpt.label}: %{z${fmtZ}}<br>Cluster ${c}<extra></extra>`,
+      };
+    });
+    const mesh = Array.from({ length: k }, (_, c) => {
+      const mask = clusterLabels.map((l, i) => l === c ? i : -1).filter((i) => i >= 0);
+      if (mask.length < 4) return null;
+      return {
+        type: 'mesh3d', name: `Surface ${c}`,
+        x: mask.map((i) => xVals[i]), y: mask.map((i) => yVals[i]), z: mask.map((i) => zVals[i]),
+        alphahull: 7, color: palette[Math.round(c * (palette.length - 1) / Math.max(k - 1, 1))], opacity: 0.15,
+        showlegend: false, hoverinfo: 'skip',
+      };
+    }).filter(Boolean);
+    return [...scatter, ...mesh];
+  }, [xVals, yVals, zVals, clusterLabels, k]); // eslint-disable-line
+
+  const layout = useMemo(() => ({
+    height: 420, margin: { l: 0, r: 0, b: 0, t: 10 },
+    paper_bgcolor: '#0a0f19',
+    font: { color: '#d1d5db', size: 10 },
+    uirevision: 'cluster3d-persist',
+    scene: {
+      bgcolor: '#0a0f19',
+      xaxis: { title: xOpt.label, gridcolor: '#1f2937', color: '#94a3b8', zerolinecolor: '#334155', ...(xKey === 'date' ? { type: 'date' } : {}) },
+      yaxis: { title: yOpt.label, gridcolor: '#1f2937', color: '#94a3b8', zerolinecolor: '#334155', ...(yKey === 'date' ? { type: 'date' } : {}) },
+      zaxis: { title: zOpt.label, gridcolor: '#1f2937', color: '#94a3b8', zerolinecolor: '#334155', ...(zKey === 'date' ? { type: 'date' } : {}) },
+      ...(cameraRef.current ? { camera: cameraRef.current } : {}),
+    },
+    legend: { orientation: 'h', y: -0.05, font: { size: 10 } },
+  }), [xKey, yKey, zKey]); // eslint-disable-line
+
+  const handleUpdate = useCallback((figure) => {
+    const cam = figure?.layout?.scene?.camera;
+    if (cam) cameraRef.current = cam;
+  }, []);
+
+  return (
+    <Plot
+      data={data}
+      layout={layout}
+      config={{ displaylogo: false, responsive: true }}
+      style={{ width: '100%' }}
+      useResizeHandler
+      onUpdate={handleUpdate}
+    />
+  );
+});
+
 export default function RegimeMLPage({ loading, activeSnapshotId, market }) {
   const [neighbors, setNeighbors] = useState(9);
   const [clusters, setClusters] = useState(3);
+  const [scatter2dX, setScatter2dX] = useState('rv20');
+  const [scatter2dY, setScatter2dY] = useState('iv');
+  const [scatter3dX, setScatter3dX] = useState('rv20');
+  const [scatter3dY, setScatter3dY] = useState('iv');
+  const [scatter3dZ, setScatter3dZ] = useState('rv60');
   const dataBundle = useMemo(() => {
     const history = market?.price_history || null;
     const dates = Array.isArray(history?.dates) ? history.dates : [];
@@ -239,7 +323,7 @@ export default function RegimeMLPage({ loading, activeSnapshotId, market }) {
     for (let i = 0; i < dates.length; i += 1) {
       const feats = [rv20[i], rv60[i], ivProxy[i], hv20[i], Math.abs(ret[i] ?? 0)];
       if (feats.some((v) => !Number.isFinite(v))) continue;
-      rows.push({ i, date: dates[i], feats, rv20: feats[0], iv: feats[2] });
+      rows.push({ i, date: dates[i], feats, rv20: feats[0], rv60: feats[1], iv: feats[2], hv20: feats[3], absRet: feats[4] });
     }
     if (rows.length < 30) return null;
 
@@ -520,39 +604,87 @@ export default function RegimeMLPage({ loading, activeSnapshotId, market }) {
             )}
           </Panel>
 
-          <Panel title="Feature Space Clustering (K-Means)" enableCopyPlot>
-            {dataBundle ? (
-              <Plot
-                data={[{
-                  type: 'scatter',
-                  mode: 'markers',
-                  x: dataBundle.rows.map((r) => r.rv20),
-                  y: dataBundle.rows.map((r) => r.iv),
-                  marker: {
-                    size: 8,
-                    color: dataBundle.clusterLabels,
-                    colorscale: 'Turbo',
-                    showscale: true,
-                    colorbar: { title: 'Cluster' },
-                  },
-                  hovertemplate: 'RV20: %{x:.4f}<br>IV Proxy: %{y:.4f}<extra></extra>',
-                  name: 'Obs',
-                }]}
-                layout={{
-                  height: 280,
-                  margin: { l: 52, r: 16, b: 40, t: 10 },
-                  paper_bgcolor: '#0a0f19',
-                  plot_bgcolor: '#0a0f19',
-                  font: { color: '#d1d5db', size: 10 },
-                  xaxis: { title: 'RV20', gridcolor: '#1f2937' },
-                  yaxis: { title: 'IV Proxy', gridcolor: '#1f2937' },
-                  showlegend: false,
-                }}
-                config={{ displaylogo: false, responsive: true }}
-                style={{ width: '100%' }}
-                useResizeHandler
-              />
-            ) : (
+          <Panel title="Feature Space Clustering (K-Means) — 2D" enableCopyPlot>
+            {dataBundle ? (() => {
+              const axisOpts = {
+                rv20: { label: 'RV20', get: (r) => r.rv20 },
+                rv60: { label: 'RV60', get: (r) => r.rv60 },
+                iv: { label: 'IV Proxy', get: (r) => r.iv },
+                hv20: { label: 'HV20', get: (r) => r.hv20 },
+                absRet: { label: '|Log Return|', get: (r) => r.absRet },
+                date: { label: 'Date', get: (r) => r.date },
+              };
+              const xOpt = axisOpts[scatter2dX] || axisOpts.rv20;
+              const yOpt = axisOpts[scatter2dY] || axisOpts.iv;
+              const xVals = dataBundle.rows.map((r, i) => xOpt.get(r, i));
+              const yVals = dataBundle.rows.map((r, i) => yOpt.get(r, i));
+              const labels = dataBundle.clusterLabels;
+              const k = Math.max(...labels) + 1;
+              const palette = ['#fef9c3', '#fde047', '#facc15', '#f59e0b', '#ea580c', '#dc2626', '#b91c1c', '#7f1d1d'];
+              const selStyle = { background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155', borderRadius: 4, padding: '2px 8px', fontSize: '0.75rem' };
+              const optionEls = Object.entries(axisOpts).map(([k, v]) => <option key={k} value={k}>{v.label}</option>);
+
+              return (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+                    <label style={{ color: '#94a3b8', fontSize: '0.75rem' }}>X:</label>
+                    <select value={scatter2dX} onChange={(e) => setScatter2dX(e.target.value)} style={selStyle}>{optionEls}</select>
+                    <label style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Y:</label>
+                    <select value={scatter2dY} onChange={(e) => setScatter2dY(e.target.value)} style={selStyle}>{optionEls}</select>
+                  </div>
+                  <Plot
+                    data={Array.from({ length: k }, (_, c) => {
+                      const mask = labels.map((l, i) => l === c ? i : -1).filter((i) => i >= 0);
+                      return {
+                        type: 'scatter', mode: 'markers', name: `Cluster ${c}`,
+                        x: mask.map((i) => xVals[i]), y: mask.map((i) => yVals[i]),
+                        marker: { size: 5, color: palette[Math.round(c * (palette.length - 1) / Math.max(k - 1, 1))], opacity: 0.85 },
+                        hovertemplate: `${xOpt.label}: %{x${scatter2dX === 'date' ? '' : ':.4f'}}<br>${yOpt.label}: %{y${scatter2dY === 'date' ? '' : ':.4f'}}<br>Cluster ${c}<extra></extra>`,
+                      };
+                    })}
+                    layout={{
+                      height: 380, margin: { l: 55, r: 20, b: 45, t: 10 },
+                      paper_bgcolor: '#0a0f19', plot_bgcolor: '#0a0f19',
+                      font: { color: '#d1d5db', size: 10 },
+                      xaxis: { title: xOpt.label, gridcolor: '#1f2937', color: '#94a3b8', zerolinecolor: '#334155', ...(scatter2dX === 'date' ? { type: 'date' } : {}) },
+                      yaxis: { title: yOpt.label, gridcolor: '#1f2937', color: '#94a3b8', zerolinecolor: '#334155', ...(scatter2dY === 'date' ? { type: 'date' } : {}) },
+                      legend: { orientation: 'h', y: -0.15, font: { size: 10 } },
+                    }}
+                    config={{ displaylogo: false, responsive: true }}
+                    style={{ width: '100%' }}
+                    useResizeHandler
+                  />
+                </>
+              );
+            })() : (
+              <div className="snapshot-placeholder">No cluster output to show yet.</div>
+            )}
+          </Panel>
+
+          <Panel title="Feature Space Clustering (K-Means) — 3D" enableCopyPlot>
+            {dataBundle ? (() => {
+              const selStyle = { background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155', borderRadius: 4, padding: '2px 8px', fontSize: '0.75rem' };
+              const optionEls = Object.entries(AXIS_OPTS_3D).map(([k, v]) => <option key={k} value={k}>{v.label}</option>);
+              return (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+                    <label style={{ color: '#94a3b8', fontSize: '0.75rem' }}>X:</label>
+                    <select value={scatter3dX} onChange={(e) => setScatter3dX(e.target.value)} style={selStyle}>{optionEls}</select>
+                    <label style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Y:</label>
+                    <select value={scatter3dY} onChange={(e) => setScatter3dY(e.target.value)} style={selStyle}>{optionEls}</select>
+                    <label style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Z:</label>
+                    <select value={scatter3dZ} onChange={(e) => setScatter3dZ(e.target.value)} style={selStyle}>{optionEls}</select>
+                  </div>
+                  <Scatter3DPlot
+                    rows={dataBundle.rows}
+                    clusterLabels={dataBundle.clusterLabels}
+                    xKey={scatter3dX}
+                    yKey={scatter3dY}
+                    zKey={scatter3dZ}
+                  />
+                </>
+              );
+            })() : (
               <div className="snapshot-placeholder">No cluster output to show yet.</div>
             )}
           </Panel>

@@ -14,6 +14,7 @@ from .risk_analyst_agent import RiskAnalystAgent
 from .strategy_advisor_agent import StrategyAdvisorAgent
 from .trade_exec_agent import TradeExecutionAgent
 from .vol_surface_agent import VolSurfaceAgent
+from .dealer_positioning_agent import DealerPositioningAgent
 
 
 # Agent routing keywords for intent detection
@@ -93,6 +94,7 @@ class OrchestratorAgent:
             "trade_execution": TradeExecutionAgent(self._client),
             "pre_trade": PreTradeAgent(self._client),
             "vol_surface": VolSurfaceAgent(self._client),
+            "dealer_positioning": DealerPositioningAgent(self._client),
         }
 
         self._conversation_history: List[AgentMessage] = []

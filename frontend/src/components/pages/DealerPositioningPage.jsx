@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Plot from 'react-plotly.js';
 import { Panel, formatNumber } from './shared';
-import { fetchDealerPositioning } from '../../api/client';
+import { fetchDealerPositioning, aiChatStream } from '../../api/client';
 
 /* ─── Formatting helpers ─── */
 const fmtCr = (v) => `₹${formatNumber(v / 1e7, 2)} Cr`;
@@ -12,6 +12,21 @@ const shortNum = (v) => {
     if (abs >= 1e5) return fmtLakh(v);
     return `₹${formatNumber(v, 0)}`;
 };
+
+function formatMarkdown(text) {
+    if (!text) return '';
+    let html = text
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/^### (.+)$/gm, '<h4 style="margin: 12px 0 6px; color: #fff;">$1</h4>')
+        .replace(/^## (.+)$/gm, '<h3 style="margin: 16px 0 8px; color: #fff;">$1</h3>')
+        .replace(/^# (.+)$/gm, '<h2 style="margin: 20px 0 10px; color: #fff;">$1</h2>')
+        .replace(/^- (.+)$/gm, '<li style="margin-left: 20px;">$1</li>')
+        .replace(/^(\d+)\. (.+)$/gm, '<li style="margin-left: 20px;">$2</li>')
+        .replace(/\n{2,}/g, '</p><p style="margin-bottom: 8px;">')
+        .replace(/\n/g, '<br/>');
+    return `<p style="margin-bottom: 8px;">${html}</p>`;
+}
 
 /* ─── Shared Plotly layout ─── */
 const DARK_LAYOUT = {
@@ -55,7 +70,12 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [camera, setCamera] = useState({ eye: { x: 1.25, y: 1.25, z: 1.25 } });
 
+    // AI Analyst State
+    const [aiThinking, setAiThinking] = useState(false);
+    const [aiOutput, setAiOutput] = useState('');
+    const [showAiResult, setShowAiResult] = useState(true);
     useEffect(() => {
         async function loadData() {
             if (!liveDataId) return;
@@ -76,6 +96,45 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
         }
         loadData();
     }, [liveDataId]);
+
+    const runAiAnalyst = async () => {
+        if (!data) return;
+        setAiOutput('');
+        setAiThinking(true);
+        setShowAiResult(true); // Auto-show on new analysis
+        console.log("Starting AI Analysis for Dealer Positioning...");
+        try {
+            // Context payload for AI
+            const contextPayload = {
+                market_overview: {
+                    spot: data.spot,
+                    metrics: data.metrics,
+                    walls: data.walls,
+                    realized_implied_spread: data.metrics.vrp, // Assuming VRP passed here
+                    gamma_clusters: data.gamma_clusters
+                },
+                surface: data.heatmap,
+            };
+
+            await aiChatStream(
+                "Perform full dealer positioning analysis.",
+                "dealer_positioning",
+                contextPayload,
+                (chunk) => {
+                    if (chunk.text) setAiOutput(chunk.text);
+                    if (chunk.done) {
+                        setAiThinking(false);
+                        console.log("AI Analysis completed.");
+                    }
+                },
+                "gemma3:4b"  // Changed from gemma3:2b which doesn't exist to gemma3:4b which is available
+            );
+        } catch (err) {
+            console.error("AI Analysis Error:", err);
+            setAiOutput(`Error: ${err.message}`);
+            setAiThinking(false);
+        }
+    };
 
     /* ── Guards ── */
     if (!liveDataId) {
@@ -98,13 +157,12 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
     const {
         spot, metrics, walls, curves, snapshots,
         heatmap, vol_suppression, gamma_density, intraday_charm,
+        gamma_clusters
     } = data;
 
     const flipLevel = metrics?.gamma_flip_level;
 
     /* ──────────────────────  PLOT  DATA  ────────────────────── */
-
-    // §1 — already rendered as cards
 
     // §2  GEX by Strike (bar)
     const gexTrace = [{
@@ -115,7 +173,23 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
         marker: { color: curves.gex.map(bullBear) },
     }];
 
-    // Cumulative GEX Profile (institutional-grade)
+    // §2.1 KNN Cluster Plot
+    const clusterTrace = gamma_clusters?.length ? [{
+        x: gamma_clusters.map(c => c.center_strike),
+        y: gamma_clusters.map(c => c.total_gex),
+        type: 'scatter',
+        mode: 'markers+text',
+        text: gamma_clusters.map(c => `Wall@${Math.round(c.center_strike)}`),
+        textposition: 'top center',
+        marker: {
+            size: gamma_clusters.map(c => Math.sqrt(Math.abs(c.total_gex / 1e7)) * 2 + 10),
+            color: gamma_clusters.map(c => bullBearSolid(c.total_gex)),
+            opacity: 0.8
+        },
+        name: 'Gamma Clusters'
+    }] : [];
+
+    // Cumulative GEX Profile
     const cumGex = [];
     let runningSum = 0;
     for (let i = 0; i < curves.gex.length; i++) {
@@ -132,7 +206,7 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
         fillcolor: 'rgba(245,158,11,0.06)',
     }];
 
-    // §3  Gamma Regime Curve (net GEX vs simulated spot)
+    // §3  Gamma Regime Curve
     const gammaRegimeTrace = [{
         x: snapshots.hedge_flow_spot_range,
         y: snapshots.net_gamma_vs_spot,
@@ -143,20 +217,18 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
         fillcolor: 'rgba(139,92,246,0.08)',
     }];
 
-    // §4  Gamma Surface Heatmap
-    const heatmapTrace = heatmap ? [{
+    // §4  3D Gamma Surface
+    const surfaceTrace = heatmap ? [{
+        type: 'surface',
         z: heatmap.matrix,
         x: heatmap.strikes,
         y: heatmap.expiries,
-        type: 'heatmap',
-        colorscale: [
-            [0, '#1e3a5f'], [0.25, '#155e75'], [0.5, '#0f766e'],
-            [0.75, '#ca8a04'], [1, '#dc2626'],
-        ],
-        colorbar: { title: 'GEX', tickfont: { color: '#9ca3af' }, titlefont: { color: '#9ca3af' } },
+        colorscale: 'RdBu',
+        reversescale: true,
+        colorbar: { title: 'GEX', tickfont: { color: '#9ca3af' } },
     }] : [];
 
-    // §5  Vanna Exposure (bar)
+    // §5  Vanna Exposure
     const vexTrace = [{
         x: curves.strikes,
         y: curves.vex,
@@ -165,7 +237,7 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
         marker: { color: curves.vex.map(v => v >= 0 ? 'rgba(56,189,248,0.7)' : 'rgba(244,114,182,0.7)') },
     }];
 
-    // §6  Charm Exposure (bar)
+    // §6  Charm Exposure
     const cexTrace = [{
         x: curves.strikes,
         y: curves.cex,
@@ -174,7 +246,7 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
         marker: { color: curves.cex.map(v => v >= 0 ? 'rgba(52,211,153,0.7)' : 'rgba(251,146,60,0.7)') },
     }];
 
-    // §7  Dealer Hedge Flow (line — net delta vs spot)
+    // §7  Dealer Hedge Flow
     const hedgeTrace = [{
         x: snapshots.hedge_flow_spot_range,
         y: snapshots.hedge_flow,
@@ -183,7 +255,7 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
         line: { color: '#3b82f6', width: 2.5 },
     }];
 
-    // §9  Vol Suppression Map (colored bars)
+    // §9  Vol Suppression Map
     const volSuppTrace = vol_suppression ? [{
         x: vol_suppression.map(v => v.strike),
         y: vol_suppression.map(v => 1),
@@ -193,7 +265,7 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
         hoverinfo: 'text',
     }] : [];
 
-    // §10  Intraday Charm Flow (bar)
+    // §10  Intraday Charm Flow
     const charmFlowTrace = intraday_charm ? [{
         x: intraday_charm.strikes,
         y: intraday_charm.delta_shift,
@@ -202,7 +274,7 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
         marker: { color: intraday_charm.delta_shift.map(bullBear) },
     }] : [];
 
-    // §11  Gamma Density Distribution (area)
+    // §11  Gamma Density Distribution
     const gammaDensityTrace = gamma_density?.bin_centers?.length ? [{
         x: gamma_density.bin_centers,
         y: gamma_density.counts,
@@ -213,12 +285,8 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
         name: 'GEX Density',
     }] : [];
 
-    /* helper: shapes + annotations for GEX-style charts */
     const gexShapes = [spotLine(spot), flipLine(flipLevel)].filter(Boolean);
     const gexAnnotations = [spotAnnotation(spot), flipAnnotation(flipLevel)].filter(Boolean);
-    const hedgeShapes = [spotLine(spot)];
-
-    /* Gamma Regime shapes: spot + flip level (red) */
     const flipRedLine = flipLevel ? ({
         type: 'line', x0: flipLevel, x1: flipLevel, y0: 0, y1: 1, yref: 'paper',
         line: { color: '#ef4444', width: 2.5, dash: 'dash' },
@@ -235,11 +303,54 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
     return (
         <div className="dealer-positioning-grid">
 
+            {/* AI ANALYST BUTTON */}
+            <div className="dp-span-full" style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+                {(aiOutput || aiThinking) && (
+                    <button
+                        className="btn btn-secondary"
+                        onClick={() => setShowAiResult(!showAiResult)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                        {showAiResult ? 'Hide Analysis' : 'Show Analysis'}
+                    </button>
+                )}
+                <button
+                    className={`btn ${aiThinking ? 'btn-loading' : 'btn-primary'}`}
+                    onClick={runAiAnalyst}
+                    disabled={aiThinking}
+                >
+                    {aiThinking ? 'Analysing...' : 'Analyse'}
+                </button>
+            </div>
+
+            {/* AI RESULT PANEL */}
+            {(aiThinking || aiOutput) && showAiResult && (
+                <div className="dp-span-full">
+                    <Panel title="Gemma3 AI Portfolio & Positioning Insight" className="ai-analyst-panel">
+                        <div
+                            className="ai-output-area ai-msg-markdown"
+                            style={{
+                                padding: 16,
+                                backgroundColor: 'rgba(0,0,0,0.2)',
+                                borderRadius: 8,
+                                minHeight: 120,
+                                fontFamily: 'Inter, sans-serif',
+                                lineHeight: 1.6,
+                                fontSize: 14,
+                                color: '#e5e7eb'
+                            }}
+                            dangerouslySetInnerHTML={{ __html: aiOutput ? formatMarkdown(aiOutput) : 'Preparing analysis pipeline...' }}
+                        />
+                    </Panel>
+                </div>
+            )}
+
             {/* ═══ §1  MARKET SUMMARY ═══ */}
             <Panel title="Market Exposure Summary" className="dp-span-full">
                 <div className="dp-metrics-row">
                     <MetricCard label="Regime" value={metrics.gamma_regime} color={bullBearSolid(metrics.total_gex)} />
-                    <MetricCard label="Gamma Flip" value={flipLevel ?? '—'} sub={`Spot ≈ ${formatNumber(spot)}`} />
+                    <MetricCard label="Gamma Flip" value={flipLevel ? formatNumber(flipLevel, 0) : 'Far OTM/ITM'} sub={`Spot ≈ ${formatNumber(spot)}`} />
+                    <MetricCard label="ATM IV" value={`${formatNumber(metrics.iv, 2)}%`} sub={`RV: ${formatNumber(metrics.rv, 2)}%`} />
                     <MetricCard label="Total GEX" value={fmtCr(metrics.total_gex)} color={bullBearSolid(metrics.total_gex)} />
                     <MetricCard label="Total VEX" value={fmtCr(metrics.total_vex)} color={bullBearSolid(metrics.total_vex)} />
                     <MetricCard label="Total CEX" value={fmtCr(metrics.total_cex)} color={bullBearSolid(metrics.total_cex)} />
@@ -247,7 +358,7 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
             </Panel>
 
             {/* ═══ §2  GEX BY STRIKE ═══ */}
-            <div className="dp-span-full">
+            <div className="dp-span-half">
                 <Panel title="Gamma Exposure by Strike">
                     <div className="dp-chart-container">
                         <Plot
@@ -255,7 +366,7 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
                             layout={{
                                 ...DARK_LAYOUT,
                                 xaxis: { ...DARK_LAYOUT.xaxis, title: 'Strike' },
-                                yaxis: { ...DARK_LAYOUT.yaxis, title: 'GEX (Notional ₹)' },
+                                yaxis: { ...DARK_LAYOUT.yaxis, title: 'GEX (₹)' },
                                 shapes: gexShapes,
                                 annotations: gexAnnotations,
                             }}
@@ -264,6 +375,53 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
                     </div>
                 </Panel>
             </div>
+
+            {/* ═══ KNN CLUSTERS ═══ */}
+            <div className="dp-span-half">
+                <Panel title="Gamma Clusters (Institutional Walls)">
+                    <div className="dp-chart-container">
+                        <Plot
+                            data={clusterTrace}
+                            layout={{
+                                ...DARK_LAYOUT,
+                                xaxis: { ...DARK_LAYOUT.xaxis, title: 'Strike' },
+                                yaxis: { ...DARK_LAYOUT.yaxis, title: 'Total GEX Cluster' },
+                                shapes: [spotLine(spot)],
+                                annotations: [spotAnnotation(spot)],
+                            }}
+                            useResizeHandler style={{ width: '100%', height: '100%' }} config={PLOT_CFG}
+                        />
+                    </div>
+                </Panel>
+            </div>
+
+            {/* ═══ §4  3D GAMMA SURFACE ═══ */}
+            {heatmap?.matrix?.length > 0 && (
+                <div className="dp-span-full">
+                    <Panel title="3D Gamma Surface (Strike × Expiry × GEX)">
+                        <div className="dp-chart-container" style={{ height: 450 }}>
+                            <Plot
+                                data={surfaceTrace}
+                                layout={{
+                                    ...DARK_LAYOUT,
+                                    scene: {
+                                        xaxis: { title: 'Strike', gridcolor: '#1f2937' },
+                                        yaxis: { title: 'Expiry', gridcolor: '#1f2937' },
+                                        zaxis: { title: 'GEX', gridcolor: '#1f2937' },
+                                        camera: camera,
+                                    },
+                                    margin: { l: 0, r: 0, t: 0, b: 0 },
+                                }}
+                                onRelayout={(e) => {
+                                    if (e['scene.camera']) setCamera(e['scene.camera']);
+                                }}
+                                useResizeHandler style={{ width: '100%', height: '100%' }}
+                                config={{ ...PLOT_CFG, displayModeBar: true }}
+                            />
+                        </div>
+                    </Panel>
+                </div>
+            )}
 
             {/* ═══ CUMULATIVE GEX PROFILE ═══ */}
             <div className="dp-span-full">
@@ -292,7 +450,7 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
                         layout={{
                             ...DARK_LAYOUT,
                             xaxis: { ...DARK_LAYOUT.xaxis, title: 'Strike' },
-                            yaxis: { ...DARK_LAYOUT.yaxis, title: 'VEX (Notional ₹)' },
+                            yaxis: { ...DARK_LAYOUT.yaxis, title: 'VEX (₹)' },
                             shapes: [spotLine(spot)],
                             annotations: [spotAnnotation(spot)],
                         }}
@@ -309,7 +467,7 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
                         layout={{
                             ...DARK_LAYOUT,
                             xaxis: { ...DARK_LAYOUT.xaxis, title: 'Strike' },
-                            yaxis: { ...DARK_LAYOUT.yaxis, title: 'CEX (Notional ₹)' },
+                            yaxis: { ...DARK_LAYOUT.yaxis, title: 'CEX (₹)' },
                             shapes: [spotLine(spot)],
                             annotations: [spotAnnotation(spot)],
                         }}
@@ -344,32 +502,13 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
                             ...DARK_LAYOUT,
                             xaxis: { ...DARK_LAYOUT.xaxis, title: 'Spot Price' },
                             yaxis: { ...DARK_LAYOUT.yaxis, title: 'Net Delta (₹)' },
-                            shapes: hedgeShapes,
+                            shapes: [spotLine(spot)],
                             annotations: [spotAnnotation(spot)],
                         }}
                         useResizeHandler style={{ width: '100%', height: '100%' }} config={PLOT_CFG}
                     />
                 </div>
             </Panel>
-
-            {/* ═══ §4  GAMMA SURFACE HEATMAP ═══ */}
-            {heatmap?.matrix?.length > 0 && (
-                <div className="dp-span-full">
-                    <Panel title="Gamma Surface (Strike × Expiry)">
-                        <div className="dp-chart-container" style={{ height: Math.max(260, heatmap.expiries.length * 60 + 80) }}>
-                            <Plot
-                                data={heatmapTrace}
-                                layout={{
-                                    ...DARK_LAYOUT,
-                                    xaxis: { ...DARK_LAYOUT.xaxis, title: 'Strike' },
-                                    yaxis: { ...DARK_LAYOUT.yaxis, title: 'Expiry', type: 'category' },
-                                }}
-                                useResizeHandler style={{ width: '100%', height: '100%' }} config={PLOT_CFG}
-                            />
-                        </div>
-                    </Panel>
-                </div>
-            )}
 
             {/* ═══ §8  GAMMA WALL TABLE ═══ */}
             <Panel title="Gamma Walls (Support / Resistance)">
@@ -396,68 +535,61 @@ export default function DealerPositioningPage({ loading: globalLoading, liveData
             </Panel>
 
             {/* ═══ §9  VOL SUPPRESSION MAP ═══ */}
-            {vol_suppression?.length > 0 && (
-                <Panel title="Volatility Suppression Map">
-                    <div className="dp-chart-container">
-                        <Plot
-                            data={volSuppTrace}
-                            layout={{
-                                ...DARK_LAYOUT,
-                                xaxis: { ...DARK_LAYOUT.xaxis, title: 'Strike' },
-                                yaxis: { ...DARK_LAYOUT.yaxis, visible: false },
-                                bargap: 0,
-                                annotations: [{
-                                    x: 0.02, y: 1.08, xref: 'paper', yref: 'paper', showarrow: false,
-                                    text: '<span style="color:#22c55e">■</span> Suppressed  <span style="color:#ef4444">■</span> Expansion  <span style="color:#6b7280">■</span> Neutral',
-                                    font: { size: 11, color: '#9ca3af' },
-                                }],
-                            }}
-                            useResizeHandler style={{ width: '100%', height: '100%' }} config={PLOT_CFG}
-                        />
-                    </div>
-                </Panel>
-            )}
+            <Panel title="Volatility Suppression Map">
+                <div className="dp-chart-container">
+                    <Plot
+                        data={volSuppTrace}
+                        layout={{
+                            ...DARK_LAYOUT,
+                            xaxis: { ...DARK_LAYOUT.xaxis, title: 'Strike' },
+                            yaxis: { ...DARK_LAYOUT.yaxis, visible: false },
+                            bargap: 0,
+                            annotations: [{
+                                x: 0.02, y: 1.08, xref: 'paper', yref: 'paper', showarrow: false,
+                                text: '<span style="color:#22c55e">■</span> Suppressed  <span style="color:#ef4444">■</span> Expansion  <span style="color:#6b7280">■</span> Neutral',
+                                font: { size: 11, color: '#9ca3af' },
+                            }],
+                        }}
+                        useResizeHandler style={{ width: '100%', height: '100%' }} config={PLOT_CFG}
+                    />
+                </div>
+            </Panel>
 
-            {/* ═══ §10  INTRADAY CHARM FLOW ═══ */}
-            {intraday_charm?.strikes?.length > 0 && (
-                <Panel title="Intraday Charm Flow (Delta Shift T→T−1d)">
-                    <div className="dp-chart-container">
-                        <Plot
-                            data={charmFlowTrace}
-                            layout={{
-                                ...DARK_LAYOUT,
-                                xaxis: { ...DARK_LAYOUT.xaxis, title: 'Strike' },
-                                yaxis: { ...DARK_LAYOUT.yaxis, title: 'Delta Shift (₹)' },
-                                shapes: [spotLine(spot)],
-                                annotations: [spotAnnotation(spot)],
-                            }}
-                            useResizeHandler style={{ width: '100%', height: '100%' }} config={PLOT_CFG}
-                        />
-                    </div>
-                </Panel>
-            )}
+            {/* ═══ §10 INTRADAY CHARM FLOW ═══ */}
+            <Panel title="Intraday Charm Flow">
+                <div className="dp-chart-container">
+                    <Plot
+                        data={charmFlowTrace}
+                        layout={{
+                            ...DARK_LAYOUT,
+                            xaxis: { ...DARK_LAYOUT.xaxis, title: 'Strike' },
+                            yaxis: { ...DARK_LAYOUT.yaxis, title: 'Delta Shift' },
+                            shapes: [spotLine(spot)],
+                            annotations: [spotAnnotation(spot)],
+                        }}
+                        useResizeHandler style={{ width: '100%', height: '100%' }} config={PLOT_CFG}
+                    />
+                </div>
+            </Panel>
 
-            {/* ═══ §11  GAMMA DENSITY ═══ */}
-            {gammaDensityTrace.length > 0 && (
-                <Panel title="Gamma Profile Distribution (Density)">
-                    <div className="dp-chart-container">
-                        <Plot
-                            data={gammaDensityTrace}
-                            layout={{
-                                ...DARK_LAYOUT,
-                                xaxis: { ...DARK_LAYOUT.xaxis, title: 'GEX Value' },
-                                yaxis: { ...DARK_LAYOUT.yaxis, title: 'Count' },
-                            }}
-                            useResizeHandler style={{ width: '100%', height: '100%' }} config={PLOT_CFG}
-                        />
-                    </div>
-                </Panel>
-            )}
+            {/* ═══ §11 GAMMA DENSITY ═══ */}
+            <Panel title="Gamma Profile Distribution">
+                <div className="dp-chart-container">
+                    <Plot
+                        data={gammaDensityTrace}
+                        layout={{
+                            ...DARK_LAYOUT,
+                            xaxis: { ...DARK_LAYOUT.xaxis, title: 'GEX Value' },
+                            yaxis: { ...DARK_LAYOUT.yaxis, title: 'Count' },
+                        }}
+                        useResizeHandler style={{ width: '100%', height: '100%' }} config={PLOT_CFG}
+                    />
+                </div>
+            </Panel>
         </div>
     );
 }
 
-/* ─── Small metric card component ─── */
 function MetricCard({ label, value, color, sub }) {
     return (
         <div className="dp-metric-card">

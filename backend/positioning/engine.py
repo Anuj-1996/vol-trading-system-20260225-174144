@@ -100,8 +100,9 @@ class DealerPositioningEngine:
             "hedge_profile": hedge_profile
         }
 
-    def _compute_gamma_flip(self, spot, T, r, strikes, opt_types, ivs, ois, lot_size, range_pct=0.10, steps=200):
+    def _compute_gamma_flip(self, spot, T, r, strikes, opt_types, ivs, ois, lot_size, range_pct=0.35, steps=300):
         """Simulate GEX across a range of spot prices to find where it crosses 0."""
+        # Wider range (default 35%) to catch levels far from ATM
         spots = np.linspace(spot * (1.0 - range_pct), spot * (1.0 + range_pct), steps)
         gex_profile = []
         
@@ -112,6 +113,10 @@ class DealerPositioningEngine:
             gex_profile.append(total)
             
         gex_profile = np.array(gex_profile)
+        
+        # Log profile boundaries for debugging
+        self._logger.debug("FLIP_SEARCH | range=[%.2f, %.2f] | gex_bounds=[%.2e, %.2e]", 
+                           spots[0], spots[-1], gex_profile[0], gex_profile[-1])
         
         # Find crossing point 
         # If all positive or all negative, flip level is out of bounds
@@ -124,14 +129,22 @@ class DealerPositioningEngine:
         cross_idx = np.where(sign_diffs != 0)[0]
         
         if len(cross_idx) > 0:
-            # Return the first crossing point
-            idx = cross_idx[0]
+            # Return the crossing point closest to current spot
+            mid_idx = steps // 2
+            closest_idx = cross_idx[np.argmin(np.abs(cross_idx - mid_idx))]
+            
+            idx = closest_idx
             # Interpolate for better precision
             s1, s2 = spots[idx], spots[idx+1]
             g1, g2 = gex_profile[idx], gex_profile[idx+1]
-            # y - y1 = m(x - x1) => 0 = g1 + (g2-g1)/(s2-s1) * (flip - s1)
-            flip = s1 - g1 * (s2 - s1) / (g2 - g1 + 1e-12)
-            return round(float(flip), 2)
+            
+            # Linear interpolation: g(s) = g1 + (g2-g1)/(s2-s1) * (s-s1)
+            # Set g(s) = 0 => 0 = g1 + m*(s-s1) => s = s1 - g1/m
+            m = (g2 - g1) / (s2 - s1 + 1e-12)
+            if abs(m) > 1e-15:
+                flip = s1 - g1 / m
+                return round(float(flip), 2)
+                
         return None
 
     def _find_gamma_walls(self, strikes: np.ndarray, gex_curve: np.ndarray, ivs: np.ndarray):

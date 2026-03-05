@@ -1,5 +1,9 @@
 import numpy as np
-from typing import Dict, Any
+import pandas as pd
+import yfinance as yf
+from typing import Dict, Any, List, Optional
+from collections import defaultdict
+from scipy.cluster.vq import kmeans2
 from ..services.engine_service import _live_data_cache
 from ..positioning.engine import DealerPositioningEngine
 from ..logger import get_logger
@@ -138,6 +142,50 @@ class PositioningService:
                 else:
                     agg_dex_curve[st_now] = (dex_t1 - dex_now)
                 
+        # ── Compute ATM IV (Align with Market Page / EngineService header logic) ──
+        atm_iv = 0.0
+        if records:
+            # 1. Group by expiry to find the nearest one
+            exp_dates = sorted(list(expiry_groups.keys()))
+            if exp_dates:
+                nearest_exp = exp_dates[0]
+                near_records = expiry_groups[nearest_exp]
+                
+                # 2. Find strike closest to spot in this expiry
+                strikes = [r.strike for r in near_records]
+                if strikes:
+                    closest_strike = min(strikes, key=lambda s: abs(s - spot))
+                    
+                    # 3. Average Call/Put IV at this specific strike
+                    r = next(r for r in near_records if r.strike == closest_strike)
+                    ivs = []
+                    if r.call_iv > 0: ivs.append(r.call_iv)
+                    if r.put_iv > 0: ivs.append(r.put_iv)
+                    
+                    if ivs:
+                        atm_iv = float(np.mean(ivs))
+        
+        # ── Fetch Historical RV/HV (last 30 days) ──
+        symbol = cached.get("symbol", "NIFTY")
+        ticker = "^NSEI" if "NIFTY" in symbol.upper() and "BANK" not in symbol.upper() else "^NSEBANK"
+        rv_reference = 0.0
+        try:
+            hist = yf.download(ticker, period="1mo", interval="1d", progress=False, threads=False)
+            if not hist.empty:
+                # Handle potential multi-index or DataFrame from newer yfinance
+                if "Close" in hist.columns:
+                    col_data = hist["Close"]
+                    if isinstance(col_data, pd.DataFrame):
+                        col_data = col_data.iloc[:, 0]
+                    
+                    closes = col_data.iloc[-21:] # ~20 trading days
+                    log_ret = np.log(closes / closes.shift(1)).dropna()
+                    if len(log_ret) > 0:
+                        rv_20d = float(log_ret.std() * np.sqrt(252.0))
+                        rv_reference = rv_20d
+        except Exception as exc:
+            self._logger.warning("HIST_VOL_FETCH_FAIL | ticker=%s | error=%s", ticker, exc)
+
         # Format final curves sorted by strike
         unique_strikes = sorted(list(agg_gex_curve.keys()))
         final_gex_curve = [agg_gex_curve[k] for k in unique_strikes]
@@ -187,30 +235,34 @@ class PositioningService:
             "delta_shift": [agg_dex_curve.get(k, 0.0) for k in unique_strikes]
         }
         
+        # ── KNN Gamma Clusters ──
+        gamma_clusters = self._calculate_gamma_clusters(unique_strikes, final_gex_curve)
+        
         # ── Weighted average T for aggregate flip-level calc ──
         total_oi = sum(r.call_oi + r.put_oi for r in records)
-        weighted_T = 0.0
+        weighted_T = 1.0 / 365.25 # Default floor (1 day)
+        if total_oi > 0:
+            calc_T = 0.0
+            for expiry_str, exp_records in expiry_groups.items():
+                try:
+                    exp_date = datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    delta = (exp_date - now).total_seconds()
+                    T = max(delta / (365.25 * 86400.0), 1e-4)
+                    exp_oi = sum(r.call_oi + r.put_oi for r in exp_records)
+                    calc_T += T * (exp_oi / total_oi)
+                except:
+                    continue
+            weighted_T = max(calc_T, 1.0/365.25)
+                
         all_strikes, all_types, all_ivs, all_ois = [], [], [], []
-        
-        for expiry_str, exp_records in expiry_groups.items():
-            try:
-                exp_date = datetime.strptime(expiry_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                delta = (exp_date - now).total_seconds()
-                T = max(delta / (365.25 * 86400.0), 1e-4)
-            except:
-                T = 7.0 / 365.25
-                
-            exp_oi = sum(r.call_oi + r.put_oi for r in exp_records)
-            if total_oi > 0:
-                weighted_T += T * (exp_oi / total_oi)
-                
+        for exp_records in expiry_groups.values():
             for r in exp_records:
                 if r.call_oi > 0:
                     all_strikes.append(r.strike); all_types.append(0); all_ivs.append(max(r.call_iv, 0.2)); all_ois.append(r.call_oi)
                 if r.put_oi > 0:
                     all_strikes.append(r.strike); all_types.append(1); all_ivs.append(max(r.put_iv, 0.2)); all_ois.append(r.put_oi)
                     
-        # Calculate Flip Level using weighted average T
+        # Calculate Flip Level using weighted average T and wider search if needed
         dummy_res = self._engine.calculate_positioning(
             spot=spot, T=weighted_T, r=risk_free_rate,
             strikes=np.array(all_strikes), option_types=np.array(all_types),
@@ -220,10 +272,17 @@ class PositioningService:
         flip_level = dummy_res["metrics"]["gamma_flip_level"]
         gamma_regime = "Market Stabilized" if total_gex > 0 else "Market Unstable"
         
+        self._logger.info("FLIP_LEVEL_CALC | spot=%.2f | T=%.4f | result=%s", spot, weighted_T, flip_level)
+        
         walls = self._engine._find_gamma_walls(np.array(all_strikes), np.array(final_gex_curve), np.array(all_ivs))
 
         hedge_profile = dummy_res["hedge_profile"]
 
+        # Ensure consistent percentage display (0-100 scale)
+        # IV from NSE is already 18.5
+        # RV from yfinance standard deviation is 0.14
+        rv_pct = rv_reference * 100.0 if rv_reference < 1.0 else rv_reference
+        
         return {
             "spot": spot,
             "timestamp": now.isoformat(),
@@ -231,10 +290,14 @@ class PositioningService:
                 "total_gex": total_gex,
                 "total_vex": total_vex,
                 "total_cex": total_cex,
+                "total_dex": total_dex,
                 "gamma_flip_level": flip_level,
-                "gamma_regime": gamma_regime
+                "gamma_regime": gamma_regime,
+                "iv": atm_iv,
+                "rv": rv_pct,
+                "vrp": atm_iv - rv_pct if atm_iv > 0 and rv_pct > 0 else 0.0,
             },
-            "walls": walls,
+           "walls": walls,
             "curves": {
                 "strikes": unique_strikes,
                 "gex": final_gex_curve,
@@ -253,5 +316,45 @@ class PositioningService:
             },
             "vol_suppression": vol_suppression,
             "gamma_density": gamma_density,
-            "intraday_charm": intraday_charm
+            "intraday_charm": intraday_charm,
+            "gamma_clusters": gamma_clusters
         }
+
+    def _calculate_gamma_clusters(self, strikes: List[float], gex_values: List[float]) -> List[Dict[str, Any]]:
+        """
+        Detect Institutional Gamma Clusters using KNN-based clustering (kmeans).
+        Clusters GEX around strikes to identify major walls and concentration zones.
+        """
+        if not strikes or len(strikes) < 5:
+            return []
+            
+        # Normalize data for clustering: [Strike, GEX]
+        data = np.column_stack((strikes, gex_values))
+        
+        # We look for ~3-5 significant clusters
+        k = min(5, len(strikes))
+        try:
+            centroids, labels = kmeans2(data, k, iter=20, minit='points')
+            
+            clusters = []
+            for i in range(k):
+                mask = labels == i
+                if not np.any(mask):
+                    continue
+                
+                c_strikes = np.array(strikes)[mask]
+                c_gex = np.array(gex_values)[mask]
+                
+                clusters.append({
+                    "center_strike": float(centroids[i, 0]),
+                    "total_gex": float(np.sum(c_gex)),
+                    "mean_gex": float(np.mean(c_gex)),
+                    "strike_range": [float(np.min(c_strikes)), float(np.max(c_strikes))],
+                    "count": int(np.sum(mask))
+                })
+            
+            # Sort clusters by strike
+            return sorted(clusters, key=lambda x: x["center_strike"])
+        except Exception as exc:
+            self._logger.error("KNN_CLUSTER_ERROR | %s", exc)
+            return []

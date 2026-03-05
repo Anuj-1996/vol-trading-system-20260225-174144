@@ -17,6 +17,12 @@ from ..simulation.dynamic_hedge import HedgeMode
 from ..ai.orchestrator_agent import OrchestratorAgent
 from ..ai.strategy_picker import StrategyPickerAgent
 from ..data import portfolio_repository as portfolio_db
+from ..services.positioning_service import PositioningService
+
+
+class PositioningPayload(BaseModel):
+    data_id: str = Field(description="Cache key returned by /api/v1/data/fetch-live")
+    risk_free_rate: float = Field(default=0.065)
 
 
 class StaticPipelinePayload(BaseModel):
@@ -135,6 +141,26 @@ _engine = StrategyEngineService()
 _jobs = AsyncJobService()
 _orchestrator = OrchestratorAgent()
 _strategy_picker = StrategyPickerAgent()
+_positioning = PositioningService()
+
+
+@router.post("/positioning/calculate")
+def calculate_dealer_positioning(payload: PositioningPayload) -> dict:
+    """Calculate GEX, VEX, CEX and Gamma walls from cached NSE option chain."""
+    _logger.info("START | calculate_dealer_positioning | data_id=%s", payload.data_id)
+    try:
+        result = _positioning.get_dealer_positioning(
+            data_id=payload.data_id,
+            risk_free_rate=payload.risk_free_rate
+        )
+        _logger.info("END | calculate_dealer_positioning")
+        return {"status": "ok", "data": result}
+    except ValueError as exc:
+        _logger.warning("WARN | calculate_dealer_positioning | %s", exc)
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        _logger.exception("ERROR | calculate_dealer_positioning")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/health")

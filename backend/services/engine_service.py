@@ -354,6 +354,11 @@ class StrategyEngineService:
             (strategy.strategy_type, strategy.strikes): float(strategy.margin)
             for strategy in strategies
         }
+        market_price_matrices = self._build_surface_market_price_matrices(
+            raw_records=raw_records,
+            expiry_list=surface.expiry_list,
+            strike_grid=surface.strike_grid,
+        )
 
         response = {
             "ingestion": self._ingestion.build_ingestion_report(raw_records),
@@ -380,6 +385,7 @@ class StrategyEngineService:
                 "strike_grid": surface.strike_grid.tolist(),
                 "maturity_grid": surface.maturity_grid.tolist(),
                 "market_iv_matrix": surface.implied_vol_matrix.tolist(),
+                **market_price_matrices,
                 "model_iv_matrix": model_iv_matrix.tolist(),
                 "residual_iv_matrix": residual_iv_matrix.tolist(),
                 "expiry_labels": oi_profile["expiry_labels"],
@@ -428,6 +434,132 @@ class StrategyEngineService:
             if bid > 0 or ask > 0:
                 market_ba[key] = (bid, ask)
         return market_ba
+
+    @staticmethod
+    def _build_surface_market_price_matrices(
+        raw_records: List[OptionChainRawRecord],
+        expiry_list: Tuple[Any, ...],
+        strike_grid: np.ndarray,
+    ) -> Dict[str, Any]:
+        """
+        Build CE/PE market premium matrices aligned to the surface grid.
+
+        Per-cell source priority: LTP -> bid/ask mid -> 0.
+        """
+        expiries = list(expiry_list or [])
+        strikes = [float(value) for value in np.asarray(strike_grid, dtype=float).tolist()]
+        num_expiries = len(expiries)
+        num_strikes = len(strikes)
+
+        if num_expiries == 0 or num_strikes == 0:
+            empty_matrix: List[List[float]] = []
+            return {
+                "call_ltp_matrix": empty_matrix,
+                "put_ltp_matrix": empty_matrix,
+                "call_mid_matrix": empty_matrix,
+                "put_mid_matrix": empty_matrix,
+                "call_market_price_matrix": empty_matrix,
+                "put_market_price_matrix": empty_matrix,
+                "combined_market_price_matrix": empty_matrix,
+                "market_price_source": "ltp_then_mid",
+            }
+
+        def _to_positive(value: Any) -> float:
+            try:
+                num = float(value)
+            except (TypeError, ValueError):
+                return 0.0
+            return num if np.isfinite(num) and num > 0 else 0.0
+
+        def _strike_key(value: Any) -> float:
+            try:
+                return round(float(value), 6)
+            except (TypeError, ValueError):
+                return float("nan")
+
+        def _mid_from_bid_ask(bid: Any, ask: Any) -> float:
+            bid_value = _to_positive(bid)
+            ask_value = _to_positive(ask)
+            if bid_value <= 0.0 or ask_value <= 0.0 or ask_value < bid_value:
+                return 0.0
+            return 0.5 * (bid_value + ask_value)
+
+        expiry_index = {expiry: idx for idx, expiry in enumerate(expiries)}
+        strike_index = {_strike_key(strike): idx for idx, strike in enumerate(strikes)}
+
+        call_ltp_sum = np.zeros((num_expiries, num_strikes), dtype=float)
+        put_ltp_sum = np.zeros((num_expiries, num_strikes), dtype=float)
+        call_mid_sum = np.zeros((num_expiries, num_strikes), dtype=float)
+        put_mid_sum = np.zeros((num_expiries, num_strikes), dtype=float)
+
+        call_ltp_count = np.zeros((num_expiries, num_strikes), dtype=float)
+        put_ltp_count = np.zeros((num_expiries, num_strikes), dtype=float)
+        call_mid_count = np.zeros((num_expiries, num_strikes), dtype=float)
+        put_mid_count = np.zeros((num_expiries, num_strikes), dtype=float)
+
+        for record in raw_records:
+            expiry_idx = expiry_index.get(record.expiry)
+            strike_idx = strike_index.get(_strike_key(record.strike))
+            if expiry_idx is None or strike_idx is None:
+                continue
+
+            call_ltp = _to_positive(record.call_price)
+            put_ltp = _to_positive(record.put_price)
+            call_mid = _mid_from_bid_ask(record.call_bid, record.call_ask)
+            put_mid = _mid_from_bid_ask(record.put_bid, record.put_ask)
+
+            if call_ltp > 0.0:
+                call_ltp_sum[expiry_idx, strike_idx] += call_ltp
+                call_ltp_count[expiry_idx, strike_idx] += 1.0
+            if put_ltp > 0.0:
+                put_ltp_sum[expiry_idx, strike_idx] += put_ltp
+                put_ltp_count[expiry_idx, strike_idx] += 1.0
+            if call_mid > 0.0:
+                call_mid_sum[expiry_idx, strike_idx] += call_mid
+                call_mid_count[expiry_idx, strike_idx] += 1.0
+            if put_mid > 0.0:
+                put_mid_sum[expiry_idx, strike_idx] += put_mid
+                put_mid_count[expiry_idx, strike_idx] += 1.0
+
+        call_ltp_matrix = np.divide(
+            call_ltp_sum,
+            np.maximum(call_ltp_count, 1.0),
+            out=np.zeros_like(call_ltp_sum),
+            where=call_ltp_count > 0.0,
+        )
+        put_ltp_matrix = np.divide(
+            put_ltp_sum,
+            np.maximum(put_ltp_count, 1.0),
+            out=np.zeros_like(put_ltp_sum),
+            where=put_ltp_count > 0.0,
+        )
+        call_mid_matrix = np.divide(
+            call_mid_sum,
+            np.maximum(call_mid_count, 1.0),
+            out=np.zeros_like(call_mid_sum),
+            where=call_mid_count > 0.0,
+        )
+        put_mid_matrix = np.divide(
+            put_mid_sum,
+            np.maximum(put_mid_count, 1.0),
+            out=np.zeros_like(put_mid_sum),
+            where=put_mid_count > 0.0,
+        )
+
+        call_market_matrix = np.where(call_ltp_matrix > 0.0, call_ltp_matrix, call_mid_matrix)
+        put_market_matrix = np.where(put_ltp_matrix > 0.0, put_ltp_matrix, put_mid_matrix)
+        combined_market_matrix = call_market_matrix + put_market_matrix
+
+        return {
+            "call_ltp_matrix": call_ltp_matrix.tolist(),
+            "put_ltp_matrix": put_ltp_matrix.tolist(),
+            "call_mid_matrix": call_mid_matrix.tolist(),
+            "put_mid_matrix": put_mid_matrix.tolist(),
+            "call_market_price_matrix": call_market_matrix.tolist(),
+            "put_market_price_matrix": put_market_matrix.tolist(),
+            "combined_market_price_matrix": combined_market_matrix.tolist(),
+            "market_price_source": "ltp_then_mid",
+        }
 
     def _build_top_strategies(
         self,
@@ -1642,6 +1774,11 @@ class StrategyEngineService:
             (strategy.strategy_type, strategy.strikes): float(strategy.margin)
             for strategy in strategies
         }
+        market_price_matrices = self._build_surface_market_price_matrices(
+            raw_records=raw_records,
+            expiry_list=surface.expiry_list,
+            strike_grid=surface.strike_grid,
+        )
 
         response = {
             "ingestion": self._ingestion.build_ingestion_report(raw_records),
@@ -1666,6 +1803,7 @@ class StrategyEngineService:
                 "strike_grid": surface.strike_grid.tolist(),
                 "maturity_grid": surface.maturity_grid.tolist(),
                 "market_iv_matrix": surface.implied_vol_matrix.tolist(),
+                **market_price_matrices,
                 "model_iv_matrix": model_iv_matrix.tolist(),
                 "residual_iv_matrix": residual_iv_matrix.tolist(),
                 "expiry_labels": oi_profile["expiry_labels"],
@@ -1857,6 +1995,11 @@ class StrategyEngineService:
             (strategy.strategy_type, strategy.strikes): float(strategy.margin)
             for strategy in strategies
         }
+        market_price_matrices = self._build_surface_market_price_matrices(
+            raw_records=raw_records,
+            expiry_list=surface.expiry_list,
+            strike_grid=surface.strike_grid,
+        )
 
         response = {
             "recalibrated": True,
@@ -1883,6 +2026,7 @@ class StrategyEngineService:
                 "strike_grid": surface.strike_grid.tolist(),
                 "maturity_grid": surface.maturity_grid.tolist(),
                 "market_iv_matrix": surface.implied_vol_matrix.tolist(),
+                **market_price_matrices,
                 "model_iv_matrix": model_iv_matrix.tolist(),
                 "residual_iv_matrix": residual_iv_matrix.tolist(),
                 "expiry_labels": oi_profile["expiry_labels"],

@@ -19,7 +19,10 @@ class OptionChainRawRecord:
     call_ask: float
     put_bid: float
     put_ask: float
-
+    call_oi: float = 0.0
+    put_oi: float = 0.0
+    call_volume: float = 0.0
+    put_volume: float = 0.0
 
 @dataclass(frozen=True)
 class FilteredOptionRecord:

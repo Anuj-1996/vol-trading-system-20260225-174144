@@ -1,0 +1,525 @@
+
+
+Dealer Positioning Engine Page
+
+Objective
+Create a page that analyzes market maker hedging pressure using option chain data and visualizes:
+
+• Gamma Exposure (GEX)
+• Vanna Exposure (VEX)
+• Charm Exposure (CEX)
+• Gamma flip level
+• Dealer hedge flows
+• Gamma walls
+• Volatility suppression zones
+
+Underlying example: NIFTY
+
+⸻
+
+PAGE LAYOUT
+
+Top Section
+Market Summary
+
+Middle Section
+Exposure Curves
+
+Bottom Section
+Market Impact
+
+⸻
+
+SECTION 1
+
+Market Summary Panel
+
+Compute and display:
+
+Spot price
+ATM strike
+Gamma Flip Level
+Total Market GEX
+Total Market VEX
+Total Market CEX
+Gamma regime (positive or negative)
+
+Gamma regime rule
+
+if total_GEX > 0
+Market Stabilized
+
+else
+Market Unstable
+
+⸻
+
+SECTION 2
+
+GAMMA EXPOSURE CURVE
+
+Plot name
+
+Gamma Exposure by Strike
+
+Inputs
+
+Strike
+Call OI
+Put OI
+Gamma
+
+Formula
+
+Call_GEX = − Gamma_call × Call_OI × ContractSize × S²
+
+Put_GEX = + Gamma_put × Put_OI × ContractSize × S²
+
+Net_GEX_strike
+
+= Call_GEX + Put_GEX
+
+X axis
+
+Strike
+
+Y axis
+
+Net_GEX_strike
+
+Add vertical lines
+
+ATM strike
+Gamma flip level
+
+Highlight
+
+Top 5 largest absolute GEX strikes.
+
+Interpretation
+
+These are gamma walls.
+
+
+Follow this mathematics:
+
+
+⸻
+
+SECTION 3
+
+NET GAMMA VS SPOT
+
+Plot name
+
+Gamma Regime Curve
+
+Purpose
+
+Find gamma flip.
+
+Procedure
+
+Simulate spot prices.
+
+Range
+
+0.9S to 1.1S
+
+Steps
+
+For each simulated spot
+
+Recompute d1
+Recompute gamma
+Recompute GEX_total
+
+Plot
+
+X axis
+
+Simulated spot
+
+Y axis
+
+Total GEX
+
+Gamma flip
+
+Spot where curve crosses zero.
+
+⸻
+
+SECTION 4
+
+GAMMA EXPOSURE HEATMAP
+
+Plot name
+
+Gamma Surface
+
+Inputs
+
+Strike
+Expiry
+Gamma
+Open Interest
+
+Compute
+
+GEX for every option.
+
+Aggregate
+
+by strike and expiry.
+
+Heatmap
+
+X axis
+
+Strike
+
+Y axis
+
+Expiry
+
+Color
+
+Gamma exposure magnitude.
+
+Interpretation
+
+Shows gamma concentration across maturities.
+
+⸻
+
+SECTION 5
+
+VANNA EXPOSURE CURVE
+
+Plot name
+
+Vanna Exposure by Strike
+
+Formula
+
+Vanna = e^(−qT) φ(d1) (√T − d1/σ)
+
+Exposure
+
+VEX = − Vanna × OI × ContractSize × S
+
+Aggregate
+
+per strike.
+
+Plot
+
+Strike vs VEX.
+
+Interpretation
+
+Large negative vanna
+
+Volatility falls during rallies.
+
+Large positive vanna
+
+Volatility spikes during selloffs.
+
+⸻
+
+SECTION 6
+
+CHARM EXPOSURE CURVE
+
+Plot name
+
+Charm Exposure by Strike
+
+Charm formula
+
+Charm_call
+
+= −e^(−qT) φ(d1)
+((2(r−q)T − d2σ√T) / (2Tσ√T))
+
+Charm_put
+
+= −Charm_call
+
+Exposure
+
+CEX = − Charm × OI × ContractSize × S
+
+Aggregate
+
+per strike.
+
+Plot
+
+Strike vs CEX.
+
+Interpretation
+
+Charm drives intraday dealer hedging flows.
+
+⸻
+
+SECTION 7
+
+DEALER HEDGE FLOW CURVE
+
+Plot name
+
+Dealer Hedge Flow vs Price
+
+Goal
+
+Estimate how much underlying dealers must trade.
+
+Compute dealer delta exposure.
+
+Dealer position assumption
+
+Dealers short options.
+
+Delta exposure
+
+Call_DEX
+
+= − Δ_call × Call_OI × ContractSize
+
+Put_DEX
+
+= − Δ_put × Put_OI × ContractSize
+
+Total dealer delta
+
+DEX_total
+
+Simulate spot moves
+
+−5% to +5%.
+
+Recalculate delta and DEX.
+
+Hedge flow
+
+Flow = change in DEX_total.
+
+Plot
+
+X axis
+
+Spot move
+
+Y axis
+
+Dealer hedge flow.
+
+Interpretation
+
+Positive slope
+
+Momentum amplification.
+
+Negative slope
+
+Mean reversion.
+
+⸻
+
+SECTION 8
+
+GAMMA WALL DETECTOR
+
+Find strikes where
+
+|GEX_strike| is largest.
+
+Return
+
+Top 5 strikes.
+
+Display as
+
+table
+
+Strike
+GEX
+Call OI
+Put OI
+
+These levels often act as
+
+support
+resistance
+pinning levels.
+
+⸻
+
+SECTION 9
+
+VOLATILITY SUPPRESSION MAP
+
+Combine
+
+GEX
+VEX
+
+Compute zones.
+
+Rules
+
+If
+
+GEX > 0
+VEX < 0
+
+Volatility suppressed.
+
+If
+
+GEX < 0
+VEX > 0
+
+Volatility expansion likely.
+
+Create heatmap.
+
+Axes
+
+Price vs volatility regime.
+
+⸻
+
+SECTION 10
+
+INTRADAY CHARM FLOW
+
+Plot
+
+Charm vs time decay.
+
+Simulate
+
+T → T − 1 day.
+
+Recompute delta.
+
+Calculate required hedge change.
+
+Plot
+
+Strike vs delta shift.
+
+Shows time-driven dealer rebalancing pressure.
+
+⸻
+
+SECTION 11
+
+GAMMA PROFILE DISTRIBUTION
+
+Plot name
+
+Gamma Density
+
+Compute
+
+Distribution of GEX across strikes.
+
+Plot
+
+Kernel density.
+
+This shows
+
+Where gamma concentration exists.
+
+⸻
+
+SECTION 12
+
+PERFORMANCE REQUIREMENTS
+
+Option chain size
+
+~150 strikes
+
+Simulated price grid
+
+200 points.
+
+Total compute time
+
+< 300 ms.
+
+Use numpy vectorization.
+
+Avoid loops.
+
+⸻
+
+SECTION 13
+
+FINAL OUTPUT STRUCTURE
+
+Return dictionary
+
+dealer_positioning
+
+containing
+
+gex_curve
+vex_curve
+cex_curve
+gamma_vs_spot
+gamma_heatmap
+dealer_flow
+gamma_walls
+vol_suppression_zones
+gamma_flip_level
+
+⸻
+
+VISUAL PAGE STRUCTURE
+
+Dealer Positioning Page
+
+Top
+
+Market Summary
+
+Gamma Flip
+Total GEX
+Total VEX
+Total CEX.
+
+Middle
+
+Gamma Exposure Curve
+Vanna Curve
+Charm Curve
+
+Bottom
+
+Gamma vs Spot
+Dealer Hedge Flow
+Gamma Heatmap
+
+Side panel
+
+Gamma walls
+Volatility regime.
+
+⸻
+
+RESULT
+
+The page will explain
+
+where price may pin
+where volatility expands
+where dealer hedging pushes the market.

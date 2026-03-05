@@ -10,6 +10,7 @@ import {
 } from './api/client';
 import AICopilotPanel from './components/AICopilotPanel';
 import BacktestPage from './components/pages/BacktestPage';
+import DealerPositioningPage from './components/pages/DealerPositioningPage';
 import MarketPage from './components/pages/MarketPage';
 import PortfolioPage from './components/pages/PortfolioPage';
 import RegimeMLPage from './components/pages/RegimeMLPage';
@@ -36,6 +37,7 @@ const INITIAL_FORM = {
 const NAV_ITEMS = [
   { key: 'market', label: 'Market' },
   { key: 'surface', label: 'Vol Surface' },
+  { key: 'positioning', label: 'Dealer Positioning' },
   { key: 'regime_ml', label: 'Regime ML' },
   { key: 'screener', label: 'Strategy Screener' },
   { key: 'detail', label: 'Strategy Detail' },
@@ -184,7 +186,7 @@ export default function App() {
           top_strategies: fallbackModules.strategies?.items || [],
         };
         setLastPipelineData(pipelinePayload);
-        aiSyncPipeline(pipelinePayload).catch(() => {});
+        aiSyncPipeline(pipelinePayload).catch(() => { });
       }
       await loadSnapshotModules(snapshotId);
       setFetchProgress('');
@@ -267,7 +269,7 @@ export default function App() {
               <option key={n} value={n}>{n} expiries</option>
             ))}
           </select>
-          <span style={{fontSize: '11px', color: '#9ca3af', marginTop: 4, display: 'block'}}>More expiries = richer term structure for Heston calibration, but slower fetch (~2s each). 5-8 is optimal.</span>
+          <span style={{ fontSize: '11px', color: '#9ca3af', marginTop: 4, display: 'block' }}>More expiries = richer term structure for Heston calibration, but slower fetch (~2s each). 5-8 is optimal.</span>
         </label>
       </Panel>
       <Panel title="Confidence Level">
@@ -404,6 +406,15 @@ export default function App() {
     if (activePage === 'regime_ml') {
       return <RegimeMLPage loading={loading} activeSnapshotId={activeSnapshotId} market={market} />;
     }
+    if (activePage === 'positioning') {
+      return (
+        <DealerPositioningPage
+          loading={loading}
+          activeSnapshotId={activeSnapshotId}
+          liveDataId={liveMetadata?.data_id}
+        />
+      );
+    }
     if (activePage === 'detail') {
       return (
         <StrategyDetailPage
@@ -468,7 +479,7 @@ export default function App() {
           </label>
           <div className="top-metric"><span>Spot</span><strong>{formatNumber(market?.spot || form.spot, 2)}</strong></div>
           <div className="top-metric"><span>IV ATM</span><strong>{market?.atm_iv != null ? (Number(market.atm_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
-          <div className="top-metric"><span>Regime</span><strong style={{color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e'}}>{market?.regime?.label || '-'}</strong></div>
+          <div className="top-metric"><span>Regime</span><strong style={{ color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e' }}>{market?.regime?.label || '-'}</strong></div>
           <div className="top-metric"><span>Source</span><strong className='status-text-ok'>NSE Live</strong></div>
           <div className="top-metric"><span>Clock</span><strong>{clockValue.toLocaleTimeString()}</strong></div>
           <button type="button" className="action-btn accent" onClick={runLive} disabled={loading}>

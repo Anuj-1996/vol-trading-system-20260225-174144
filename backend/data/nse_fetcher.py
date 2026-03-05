@@ -365,6 +365,10 @@ class NSEOptionChainFetcher:
                 call_ask=call_ask,
                 put_bid=put_bid,
                 put_ask=put_ask,
+                call_oi=call_oi,
+                put_oi=put_oi,
+                call_volume=call_volume,
+                put_volume=put_volume,
             )
             records.append(record)
 

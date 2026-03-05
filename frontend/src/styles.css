@@ -288,6 +288,26 @@ textarea {
   overflow: hidden;
 }
 
+/* 3D plots need overflow: visible so drag events are not clipped */
+.panel-3d .bbg-panel-body {
+  overflow: visible;
+}
+.panel-3d .bbg-panel-body .js-plotly-plot,
+.panel-3d .bbg-panel-body .plot-container {
+  overflow: visible !important;
+  touch-action: none;
+}
+.panel-fullscreen-panel.panel-3d .bbg-panel-body {
+  overflow: visible;
+}
+.panel-fullscreen-panel.panel-3d .js-plotly-plot,
+.panel-fullscreen-panel.panel-3d .plot-container,
+.panel-fullscreen-panel.panel-3d .svg-container {
+  min-height: unset !important;
+  height: unset !important;
+  max-height: unset !important;
+}
+
 .page-market-grid > *,
 .page-surface-grid > *,
 .page-regime-grid > *,
@@ -752,6 +772,65 @@ textarea {
   border-color: #334155;
 }
 
+/* ────────────────────────────────────────────────────────────────── */
+/*  Dealer Positioning Page                                          */
+/* ────────────────────────────────────────────────────────────────── */
+.dealer-positioning-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dp-span-full {
+  grid-column: 1 / -1;
+}
+
+.dp-metrics-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dp-metric-card {
+  border: 1px solid #1f2937;
+  background: #0b1220;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border-radius: 4px;
+  transition: border-color 0.2s;
+}
+
+.dp-metric-card:hover {
+  border-color: #374151;
+}
+
+.dp-metric-label {
+  font-size: 0.65rem;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.dp-metric-value {
+  font-size: 1.05rem;
+  color: #f8fafc;
+  display: block;
+  margin-top: 2px;
+}
+
+.dp-metric-sub {
+  font-size: 0.6rem;
+  color: #6b7280;
+  margin-top: 1px;
+}
+
+.dp-chart-container {
+  padding: 8px;
+  height: 340px;
+}
+
 .error-box {
   margin: 8px 10px 0;
   border: 1px solid #b91c1c;
@@ -828,8 +907,13 @@ textarea {
   .page-risk-grid,
   .page-backtest-grid,
   .page-portfolio-grid,
-  .page-settings-grid {
+  .page-settings-grid,
+  .dealer-positioning-grid {
     grid-template-columns: 1fr;
+  }
+
+  .dp-metrics-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .screener-summary-grid {

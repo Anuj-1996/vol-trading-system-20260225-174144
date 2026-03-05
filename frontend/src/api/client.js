@@ -454,6 +454,13 @@ export async function fetchLiveNSEData(symbol = 'NIFTY', expiries = null, maxExp
   });
 }
 
+export async function fetchDealerPositioning(dataId) {
+  return request('/positioning/calculate', {
+    method: 'POST',
+    body: JSON.stringify({ data_id: dataId }),
+  });
+}
+
 export async function getNSEExpiries(symbol = 'NIFTY') {
   return request(`/data/expiries?symbol=${encodeURIComponent(symbol)}`);
 }

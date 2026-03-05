@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { Panel, SnapshotGuard, formatNumber, formatPct } from './shared.jsx';
 
@@ -270,6 +270,34 @@ function interpolateTermValue(days, values, targetDay) {
   return null;
 }
 
+// ── BSM Greeks helpers ─────────────────────────────────────────────────
+function ncdf(x) {
+  const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+  const sign = x < 0 ? -1 : 1;
+  const t = 1 / (1 + p * Math.abs(x));
+  const y = 1 - (((((a5*t+a4)*t+a3)*t+a2)*t+a1)*t) * Math.exp(-x*x);
+  return 0.5*(1+sign*y);
+}
+function npdf(x) { return Math.exp(-0.5*x*x)/Math.sqrt(2*Math.PI); }
+function bsmGreeks(S, K, T, sigma, r, isCall) {
+  if (!S||!K||T<=0||sigma<=0) return null;
+  const sq=Math.sqrt(T);
+  const d1=(Math.log(S/K)+(r+0.5*sigma*sigma)*T)/(sigma*sq);
+  const d2=d1-sigma*sq;
+  const Nd1=ncdf(d1), Nd2=ncdf(d2), nd1=npdf(d1), DF=Math.exp(-r*T);
+  const rhoRaw = isCall ? (K * T * DF * Nd2) / 100 : (-K * T * DF * (1 - Nd2)) / 100;
+  return {
+    iv: sigma*100,
+    delta: Math.abs(isCall ? Nd1 : Nd1-1),
+    gamma: nd1/(S*sigma*sq),
+    theta: Math.abs((isCall ? -S*nd1*sigma/(2*sq)-r*K*DF*Nd2 : -S*nd1*sigma/(2*sq)+r*K*DF*(1-Nd2))/365),
+    rho: Math.abs(rhoRaw),
+    vega:  S*nd1*sq/100,
+    price: isCall ? S*Nd1-K*DF*Nd2 : K*DF*(1-Nd2)-S*(1-Nd1),
+  };
+}
+// ────────────────────────────────────────────────────────────────────────
+
 export default function MarketPage({ loading = false, activeSnapshotId = null, market = {}, surface = {}, selectedExpiryIndex = 0 }) {
   const [selectedModel, setSelectedModel] = useState('GARCH');
   const [scatterXKey, setScatterXKey] = useState('hv20');
@@ -277,36 +305,70 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
   const [vrpBasis, setVrpBasis] = useState('atm_iv_rv20');
   const [vrpLogValues, setVrpLogValues] = useState(false);
   const [strikeRange, setStrikeRange] = useState(500);
+  const [skewExpiryIndex, setSkewExpiryIndex] = useState(selectedExpiryIndex);
+  const [skewCompareAll, setSkewCompareAll] = useState(false);
+  const [skewHiddenExpiries, setSkewHiddenExpiries] = useState(new Set());
+  const [skewYAxisMetric, setSkewYAxisMetric] = useState('iv_pct');
+  const [priceCompExpiryIndex, setPriceCompExpiryIndex] = useState(selectedExpiryIndex);
+  const [priceCompStrikeRange, setPriceCompStrikeRange] = useState(1200);
+  const [priceCompSideMode, setPriceCompSideMode] = useState('both');
+  const [priceCompShowLabels, setPriceCompShowLabels] = useState(true);
+  const priceCompLegendStateRef = useRef({});
+  const [grgStrikeIdx, setGrgStrikeIdx] = useState(null);   // null = auto ATM
+  const [grgOptionType, setGrgOptionType] = useState('call'); // 'call' | 'put'
 
   const strikeGrid = Array.isArray(surface?.strike_grid) ? surface.strike_grid : [];
   const marketMatrix = Array.isArray(surface?.market_iv_matrix) ? surface.market_iv_matrix : [];
-  const marketSlice = marketMatrix[selectedExpiryIndex] || marketMatrix[0] || [];
+  const callMarketPriceMatrix = Array.isArray(surface?.call_market_price_matrix) ? surface.call_market_price_matrix : [];
+  const putMarketPriceMatrix = Array.isArray(surface?.put_market_price_matrix) ? surface.put_market_price_matrix : [];
+  const callLtpMatrix = Array.isArray(surface?.call_ltp_matrix) ? surface.call_ltp_matrix : [];
+  const putLtpMatrix = Array.isArray(surface?.put_ltp_matrix) ? surface.put_ltp_matrix : [];
+  const callMidMatrix = Array.isArray(surface?.call_mid_matrix) ? surface.call_mid_matrix : [];
+  const putMidMatrix = Array.isArray(surface?.put_mid_matrix) ? surface.put_mid_matrix : [];
   const spot = Number(market?.spot ?? 0);
 
-  // Build clean, sorted skew curve data
+  // Expiry options for the skew curve dropdown
+  const maturityGrid = Array.isArray(surface?.maturity_grid) ? surface.maturity_grid : [];
+  const expiryList = Array.isArray(surface?.expiry_list) ? surface.expiry_list : [];
+
+  const getMatrixPrice = (matrix, expiryIdx, strikeIdx) => {
+    const row = Array.isArray(matrix?.[expiryIdx]) ? matrix[expiryIdx] : null;
+    const value = Number(row?.[strikeIdx]);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  };
+
+  const getPreferredOptionPrice = (expiryIdx, strikeIdx, side) => {
+    const isCall = side === 'call';
+    const marketPrice = getMatrixPrice(
+      isCall ? callMarketPriceMatrix : putMarketPriceMatrix,
+      expiryIdx,
+      strikeIdx,
+    );
+    if (marketPrice != null) return marketPrice;
+
+    const ltpPrice = getMatrixPrice(isCall ? callLtpMatrix : putLtpMatrix, expiryIdx, strikeIdx);
+    if (ltpPrice != null) return ltpPrice;
+
+    return getMatrixPrice(isCall ? callMidMatrix : putMidMatrix, expiryIdx, strikeIdx);
+  };
+  const skewExpiryOptions = maturityGrid.map((t, i) => {
+    const days = Math.max(1, Math.round(Number(t) * 365));
+    const label = expiryList[i] ? `${expiryList[i]} (${days}D)` : `${days}D`;
+    return { value: i, label };
+  });
+
+  // Build clean, sorted skew curve data using skewExpiryIndex
+  const safeSkewIndex = Math.min(skewExpiryIndex, Math.max(0, marketMatrix.length - 1));
+  const skewMarketSlice = marketMatrix[safeSkewIndex] || marketMatrix[0] || [];
   const sortedIndices = strikeGrid
     .map((s, i) => ({ s: Number(s), i }))
     .filter(({ s }) => Number.isFinite(s))
     .sort((a, b) => a.s - b.s);
   const sortedStrikes = sortedIndices.map(({ s }) => s);
-  const sortedIVs = sortedIndices.map(({ i }) => {
-    const v = Number(marketSlice[i]);
-    return Number.isFinite(v) && v > 0 ? v : null;
-  });
-  // Simple 3-point moving average smoothing
-  const smoothedIVs = sortedIVs.map((v, idx, arr) => {
-    const vals = [arr[idx - 1], v, arr[idx + 1]].filter((x) => x != null);
-    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-  });
   // Auto-detect ATM as the strike closest to spot
   const atmStrike = sortedStrikes.length && spot > 0
     ? sortedStrikes.reduce((best, s) => Math.abs(s - spot) < Math.abs(best - spot) ? s : best, sortedStrikes[0])
     : null;
-  const filteredPairs = sortedStrikes
-    .map((s, i) => ({ s, iv: smoothedIVs[i] }))
-    .filter(({ s, iv }) => iv != null && (atmStrike == null || (s >= atmStrike - strikeRange && s <= atmStrike + strikeRange)));
-  const filteredStrikeGrid = filteredPairs.map(({ s }) => s);
-  const filteredMarketSlice = filteredPairs.map(({ iv }) => iv);
   const termDays = Array.isArray(market?.term_structure_days) ? market.term_structure_days : [];
   const termMarketAtm = Array.isArray(market?.term_structure_market_atm) ? market.term_structure_market_atm : [];
   const termModelAtm = Array.isArray(market?.term_structure_model_atm) ? market.term_structure_model_atm : [];
@@ -819,69 +881,565 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
             />
           </Panel>
           <Panel title="Skew Curve">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '8px' }}>
-              <span style={{ color: '#9ca3af', fontSize: 12 }}>
-                ATM: <strong style={{ color: '#f59e0b' }}>{atmStrike != null ? atmStrike.toLocaleString() : '-'}</strong>
-                {spot > 0 && <span style={{ color: '#6b7280' }}> (Spot: {spot.toLocaleString()})</span>}
-              </span>
-              <label style={{ color: '#9ca3af', fontSize: 12 }}>
-                Range ±
-                <select value={strikeRange} onChange={(e) => setStrikeRange(Number(e.target.value))} style={{ marginLeft: '6px', background: '#1f2937', color: '#d1d5db', border: '1px solid #374151', borderRadius: 4, padding: '2px 6px' }}>
-                  <option value={500}>500</option>
-                  <option value={800}>800</option>
-                  <option value={1200}>1200</option>
-                  <option value={1500}>1500</option>
-                </select>
-              </label>
-            </div>
-            {(!filteredStrikeGrid || !filteredMarketSlice || filteredStrikeGrid.length === 0 || filteredMarketSlice.length === 0) ? (
-              <div style={{ color: '#ef4444', textAlign: 'center' }}>No data available for Skew Curve</div>
-            ) : (
-              <Plot
-                data={[
-                  {
+            {(() => {
+              const COLORS = ['#38bdf8','#22c55e','#f59e0b','#a78bfa','#f472b6','#34d399','#fb923c','#60a5fa','#e879f9','#facc15'];
+              const isPriceAxis = skewYAxisMetric === 'combined_price';
+              const toIvFraction = (value) => {
+                const iv = Number(value);
+                if (!Number.isFinite(iv) || iv <= 0) return null;
+                return iv <= 2 ? iv : iv / 100;
+              };
+              const buildPairs = (slice, expiryIdx) => {
+                const T_yr = Number(maturityGrid[expiryIdx] ?? 0);
+                const ivs = sortedIndices.map(({ i }) => toIvFraction(slice[i]));
+                const smoothed = ivs.map((v, idx, arr) => {
+                  const vals = [arr[idx - 1], v, arr[idx + 1]].filter((x) => x != null);
+                  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+                });
+                return sortedIndices
+                  .map(({ s, i: strikeIdx }, sortedIdx) => {
+                    const iv = smoothed[sortedIdx];
+                    if (iv == null) return null;
+                    if (atmStrike != null && (s < atmStrike - strikeRange || s > atmStrike + strikeRange)) return null;
+                    if (!isPriceAxis) return { s, y: iv };
+
+                    const callMarketPrice = getPreferredOptionPrice(expiryIdx, strikeIdx, 'call');
+                    const putMarketPrice = getPreferredOptionPrice(expiryIdx, strikeIdx, 'put');
+                    if (callMarketPrice != null && putMarketPrice != null) {
+                      return { s, y: callMarketPrice + putMarketPrice };
+                    }
+
+                    if (!(spot > 0) || !(s > 0) || !(T_yr > 0)) return null;
+                    const call = bsmGreeks(spot, s, T_yr, iv, 0.06, true);
+                    const put = bsmGreeks(spot, s, T_yr, iv, 0.06, false);
+                    if (!call || !put) return null;
+                    return { s, y: call.price + put.price };
+                  })
+                  .filter(Boolean);
+              };
+              const toggleExpiry = (ei) => {
+                setSkewHiddenExpiries((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(ei)) next.delete(ei); else next.add(ei);
+                  return next;
+                });
+              };
+              // Build all-expiry traces for compare mode
+              const allExpiryTraces = skewCompareAll
+                ? marketMatrix.map((slice, ei) => {
+                    if (skewHiddenExpiries.has(ei)) return null;
+                    const pairs = buildPairs(slice, ei);
+                    return {
+                      type: 'scatter',
+                      mode: 'lines',
+                      x: pairs.map(({ s }) => s),
+                      y: pairs.map(({ y }) => y),
+                      line: { color: COLORS[ei % COLORS.length], width: 2 },
+                      name: skewExpiryOptions[ei]?.label || `Exp ${ei}`,
+                      hovertemplate: isPriceAxis
+                        ? '<b>%{fullData.name}</b><br>Strike:%{x:,.0f}<br>Combined Price:\u20b9%{y:,.2f}<extra></extra>'
+                        : '<b>%{fullData.name}</b><br>Strike:%{x:,.0f}<br>IV:%{y:.2%}<extra></extra>',
+                    };
+                  }).filter((t) => t && t.x.length > 0)
+                : null;
+              const singlePairs = buildPairs(skewMarketSlice, safeSkewIndex);
+              const plotData = skewCompareAll
+                ? allExpiryTraces
+                : [{
                     type: 'scatter',
                     mode: 'lines+markers',
-                    x: filteredStrikeGrid,
-                    y: filteredMarketSlice,
+                    x: singlePairs.map(({ s }) => s),
+                    y: singlePairs.map(({ y }) => y),
                     line: { color: '#38bdf8', width: 2 },
-                    name: 'IV Skew',
+                    name: skewExpiryOptions[skewExpiryIndex]?.label || 'Skew',
+                    hovertemplate: isPriceAxis
+                      ? '<b>%{fullData.name}</b><br>Strike:%{x:,.0f}<br>Combined Price:\u20b9%{y:,.2f}<extra></extra>'
+                      : '<b>%{fullData.name}</b><br>Strike:%{x:,.0f}<br>IV:%{y:.2%}<extra></extra>',
+                  }];
+              const hasData = plotData && plotData.length > 0 && plotData.some((t) => t.x.length > 0);
+              return (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                    <span style={{ color: '#9ca3af', fontSize: 12 }}>
+                      ATM: <strong style={{ color: '#f59e0b' }}>{atmStrike != null ? atmStrike.toLocaleString() : '-'}</strong>
+                      {spot > 0 && <span style={{ color: '#6b7280' }}> (Spot: {spot.toLocaleString()})</span>}
+                    </span>
+                    {skewExpiryOptions.length > 0 && (
+                      <label style={{ color: skewCompareAll ? '#4b5563' : '#9ca3af', fontSize: 12 }}>
+                        Expiry
+                        <select value={skewExpiryIndex} disabled={skewCompareAll} onChange={(e) => setSkewExpiryIndex(Number(e.target.value))} style={{ marginLeft: '6px', background: '#1f2937', color: skewCompareAll ? '#4b5563' : '#d1d5db', border: '1px solid #374151', borderRadius: 4, padding: '2px 6px' }}>
+                          {skewExpiryOptions.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <label style={{ color: '#9ca3af', fontSize: 12 }}>
+                      Range ±
+                      <select value={strikeRange} onChange={(e) => setStrikeRange(Number(e.target.value))} style={{ marginLeft: '6px', background: '#1f2937', color: '#d1d5db', border: '1px solid #374151', borderRadius: 4, padding: '2px 6px' }}>
+                        <option value={500}>500</option>
+                        <option value={800}>800</option>
+                        <option value={1200}>1200</option>
+                        <option value={1500}>1500</option>
+                      </select>
+                    </label>
+                    <label style={{ color: '#9ca3af', fontSize: 12 }}>
+                      Y Axis
+                      <select value={skewYAxisMetric} onChange={(e) => setSkewYAxisMetric(e.target.value)} style={{ marginLeft: '6px', background: '#1f2937', color: '#d1d5db', border: '1px solid #374151', borderRadius: 4, padding: '2px 6px' }}>
+                        <option value="iv_pct">IV %</option>
+                        <option value="combined_price">Combined Price (Call+Put)</option>
+                      </select>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#9ca3af', fontSize: 12, cursor: 'pointer', userSelect: 'none' }}>
+                      <input type="checkbox" checked={skewCompareAll} onChange={(e) => { setSkewCompareAll(e.target.checked); setSkewHiddenExpiries(new Set()); }} style={{ accentColor: '#38bdf8' }} />
+                      Compare all expiries
+                    </label>
+                  </div>
+                  {skewCompareAll && skewExpiryOptions.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                      {skewExpiryOptions.map((opt) => {
+                        const hidden = skewHiddenExpiries.has(opt.value);
+                        const color = COLORS[opt.value % COLORS.length];
+                        return (
+                          <button
+                            key={opt.value}
+                            onClick={() => toggleExpiry(opt.value)}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: '5px',
+                              background: hidden ? '#111827' : color + '22',
+                              border: `1px solid ${hidden ? '#374151' : color}`,
+                              borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
+                              color: hidden ? '#4b5563' : color, fontSize: 11,
+                              textDecoration: hidden ? 'line-through' : 'none',
+                              transition: 'all 0.15s',
+                            }}
+                          >
+                            <span style={{ width: 8, height: 8, borderRadius: '50%', background: hidden ? '#374151' : color, display: 'inline-block', flexShrink: 0 }} />
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {!hasData ? (
+                    <div style={{ color: '#ef4444', textAlign: 'center' }}>No data available for Skew Curve</div>
+                  ) : (
+                    <Plot
+                      data={plotData}
+                      layout={{
+                        height: 260,
+                        margin: { l: 58, r: 12, b: 36, t: 10 },
+                        paper_bgcolor: '#0a0f19',
+                        plot_bgcolor: '#0a0f19',
+                        font: { color: '#d1d5db', size: 11 },
+                        xaxis: { title: 'Strike', gridcolor: '#1f2937', tickformat: ',.0f' },
+                        yaxis: {
+                          title: isPriceAxis ? 'Combined Price (\u20b9)' : 'Implied Vol (%)',
+                          gridcolor: '#1f2937',
+                          tickformat: isPriceAxis ? ',.2f' : '.1%',
+                        },
+                        shapes: atmStrike != null ? [{
+                          type: 'line',
+                          x0: atmStrike, x1: atmStrike, y0: 0, y1: 1, yref: 'paper',
+                          line: { color: '#f59e0b', width: 2, dash: 'dash' },
+                        }] : [],
+                        annotations: atmStrike != null ? [{
+                          x: atmStrike, y: 1, yref: 'paper',
+                          text: `ATM ${atmStrike.toLocaleString()}`,
+                          showarrow: false, font: { color: '#f59e0b', size: 10 },
+                          xanchor: 'left', yanchor: 'top',
+                        }] : [],
+                        showlegend: false,
+                      }}
+                      config={{ displaylogo: false, responsive: true }}
+                      style={{ width: '100%' }}
+                      useResizeHandler
+                    />
+                  )}
+                </>
+              );
+            })()}
+          </Panel>
+          <Panel title="Price Composition by Strike (Stacked)">
+            {(() => {
+              const COMP_KEYS = ['delta', 'gamma', 'theta', 'vega', 'rho'];
+              const COMP_LABELS = { delta: 'Δ', gamma: 'Γ', theta: 'Θ', vega: 'ν', rho: 'ρ' };
+              const CALL_COLORS = { delta: '#15803d', gamma: '#0369a1', theta: '#b45309', vega: '#0f766e', rho: '#5b21b6' };
+              const PUT_COLORS = { delta: '#b91c1c', gamma: '#9d174d', theta: '#9a3412', vega: '#be123c', rho: '#6b21a8' };
+              const safeExpiryIdx = Math.min(priceCompExpiryIndex, Math.max(0, marketMatrix.length - 1));
+              const T_yr = Number(maturityGrid[safeExpiryIdx] ?? 0);
+              const ivRow = marketMatrix[safeExpiryIdx] || [];
+
+              const toIvFraction = (value) => {
+                const iv = Number(value);
+                if (!Number.isFinite(iv) || iv <= 0) return null;
+                return iv <= 2 ? iv : iv / 100;
+              };
+
+              const splitPriceByGreeks = (greeks, marketPrice = null) => {
+                const market = Number(marketPrice);
+                const model = Number(greeks?.price);
+                const price = Number.isFinite(market) && market > 0 ? market : model;
+                if (!Number.isFinite(price) || price <= 0) return null;
+                const deltaShock = Math.abs(Number(greeks?.delta) * spot * 0.01);
+                const gammaShock = Math.abs(0.5 * Number(greeks?.gamma) * (spot * 0.01) * (spot * 0.01));
+                const thetaShock = Math.abs(Number(greeks?.theta));
+                const vegaShock = Math.abs(Number(greeks?.vega));
+                const rhoShock = Math.abs(Number(greeks?.rho));
+                const shockMap = { delta: deltaShock, gamma: gammaShock, theta: thetaShock, vega: vegaShock, rho: rhoShock };
+                const shockTotal = COMP_KEYS.reduce((acc, key) => acc + (Number.isFinite(shockMap[key]) ? shockMap[key] : 0), 0);
+                if (!(shockTotal > 1e-12)) {
+                  return {
+                    price,
+                    compPrice: { delta: price / 5, gamma: price / 5, theta: price / 5, vega: price / 5, rho: price / 5 },
+                    compPct: { delta: 20, gamma: 20, theta: 20, vega: 20, rho: 20 },
+                  };
+                }
+                const compPrice = {};
+                const compPct = {};
+                COMP_KEYS.forEach((key) => {
+                  const ratio = (shockMap[key] || 0) / shockTotal;
+                  compPrice[key] = price * ratio;
+                  compPct[key] = ratio * 100;
+                });
+                return { price, compPrice, compPct };
+              };
+
+              const rows = sortedIndices.map(({ s, i }) => {
+                if (atmStrike != null && Math.abs(s - atmStrike) > priceCompStrikeRange) return null;
+                const iv = toIvFraction(ivRow[i]);
+                if (iv == null || !(T_yr > 0) || !(spot > 0) || !(s > 0)) return null;
+                const callGreeks = bsmGreeks(spot, s, T_yr, iv, 0.06, true);
+                const putGreeks = bsmGreeks(spot, s, T_yr, iv, 0.06, false);
+                const callMarketPrice = getPreferredOptionPrice(safeExpiryIdx, i, 'call');
+                const putMarketPrice = getPreferredOptionPrice(safeExpiryIdx, i, 'put');
+                const callSplit = splitPriceByGreeks(callGreeks, callMarketPrice);
+                const putSplit = splitPriceByGreeks(putGreeks, putMarketPrice);
+                if (!callSplit || !putSplit) return null;
+                return { strike: s, call: callSplit, put: putSplit };
+              }).filter(Boolean);
+
+              const makeTrace = (side, key) => {
+                const isCall = side === 'call';
+                const palette = isCall ? CALL_COLORS : PUT_COLORS;
+                const traceKey = `${side}-${key}`;
+                return {
+                  type: 'bar',
+                  x: rows.map((row) => row.strike),
+                  y: rows.map((row) => row[side].compPrice[key]),
+                  name: `${isCall ? 'Call' : 'Put'} ${COMP_LABELS[key]}`,
+                  marker: { color: palette[key], opacity: 0.9 },
+                  offsetgroup: side,
+                  legendgroup: traceKey,
+                  uid: traceKey,
+                  visible: priceCompLegendStateRef.current[traceKey] ?? true,
+                  customdata: rows.map((row) => [row[side].compPct[key], row[side].price]),
+                  hovertemplate:
+                    `<b>${isCall ? 'Call' : 'Put'} ${COMP_LABELS[key]}</b><br>`
+                    + 'Strike:%{x:,.0f}<br>'
+                    + 'Component Price:\u20b9%{y:,.2f}<br>'
+                    + 'Share:%{customdata[0]:.1f}%<br>'
+                    + `${isCall ? 'Call' : 'Put'} Price:\u20b9%{customdata[1]:,.2f}<extra></extra>`,
+                };
+              };
+
+              const traces = [];
+              if (priceCompSideMode === 'call' || priceCompSideMode === 'both') {
+                COMP_KEYS.forEach((key) => traces.push(makeTrace('call', key)));
+              }
+              if (priceCompSideMode === 'put' || priceCompSideMode === 'both') {
+                COMP_KEYS.forEach((key) => traces.push(makeTrace('put', key)));
+              }
+
+              const captureLegendState = (figure) => {
+                const data = Array.isArray(figure?.data) ? figure.data : [];
+                if (!data.length) return;
+                data.forEach((trace) => {
+                  const traceKey = trace?.uid || trace?.legendgroup;
+                  if (!traceKey) return;
+                  priceCompLegendStateRef.current[traceKey] = trace?.visible ?? true;
+                });
+              };
+
+              const hasData = rows.length > 0 && traces.length > 0;
+              return (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                    <span style={{ color: '#9ca3af', fontSize: 12 }}>
+                      ATM: <strong style={{ color: '#f59e0b' }}>{atmStrike != null ? atmStrike.toLocaleString() : '-'}</strong>
+                      {spot > 0 && <span style={{ color: '#6b7280' }}> (Spot: {spot.toLocaleString()})</span>}
+                    </span>
+                    {skewExpiryOptions.length > 0 && (
+                      <label style={{ color: '#9ca3af', fontSize: 12 }}>
+                        Expiry
+                        <select value={priceCompExpiryIndex} onChange={(e) => setPriceCompExpiryIndex(Number(e.target.value))} style={{ marginLeft: '6px', background: '#1f2937', color: '#d1d5db', border: '1px solid #374151', borderRadius: 4, padding: '2px 6px' }}>
+                          {skewExpiryOptions.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <label style={{ color: '#9ca3af', fontSize: 12 }}>
+                      Strike Range
+                      <select value={priceCompStrikeRange} onChange={(e) => setPriceCompStrikeRange(Number(e.target.value))} style={{ marginLeft: '6px', background: '#1f2937', color: '#d1d5db', border: '1px solid #374151', borderRadius: 4, padding: '2px 6px' }}>
+                        {[500, 800, 1200, 1500].map((value) => <option key={value} value={value}>±{value}</option>)}
+                      </select>
+                    </label>
+                    <label style={{ color: '#9ca3af', fontSize: 12 }}>
+                      Price Separation
+                      <select value={priceCompSideMode} onChange={(e) => setPriceCompSideMode(e.target.value)} style={{ marginLeft: '6px', background: '#1f2937', color: '#d1d5db', border: '1px solid #374151', borderRadius: 4, padding: '2px 6px' }}>
+                        <option value="both">Call + Put (Separated)</option>
+                        <option value="call">Call only</option>
+                        <option value="put">Put only</option>
+                      </select>
+                    </label>
+                    <label style={{ color: '#9ca3af', fontSize: 12 }}>
+                      Legend Labels
+                      <select value={priceCompShowLabels ? 'on' : 'off'} onChange={(e) => setPriceCompShowLabels(e.target.value === 'on')} style={{ marginLeft: '6px', background: '#1f2937', color: '#d1d5db', border: '1px solid #374151', borderRadius: 4, padding: '2px 6px' }}>
+                        <option value="on">On</option>
+                        <option value="off">Off</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  {!hasData ? (
+                    <div className="snapshot-placeholder">No data available for selected expiry/range.</div>
+                  ) : (
+                    <Plot
+                      data={traces}
+                      layout={{
+                        height: 360,
+                        margin: { l: 58, r: 16, b: 40, t: 10 },
+                        paper_bgcolor: '#0a0f19',
+                        plot_bgcolor: '#0a0f19',
+                        font: { color: '#d1d5db', size: 11 },
+                        uirevision: 'price-comp-stacked',
+                        barmode: 'relative',
+                        xaxis: { title: 'Strike', gridcolor: '#1f2937', tickformat: ',.0f' },
+                        yaxis: { title: 'Price (\u20b9)', gridcolor: '#1f2937', tickformat: ',.2f' },
+                        shapes: atmStrike != null ? [
+                          {
+                            type: 'line',
+                            x0: atmStrike,
+                            x1: atmStrike,
+                            y0: 0,
+                            y1: 1,
+                            yref: 'paper',
+                            line: { color: '#f59e0b', width: 2, dash: 'dash' },
+                          },
+                        ] : [],
+                        annotations: atmStrike != null ? [
+                          {
+                            x: atmStrike,
+                            y: 1,
+                            yref: 'paper',
+                            text: `ATM ${atmStrike.toLocaleString()}`,
+                            showarrow: false,
+                            font: { color: '#f59e0b', size: 10 },
+                            xanchor: 'left',
+                            yanchor: 'top',
+                          },
+                        ] : [],
+                        showlegend: priceCompShowLabels,
+                        legend: { orientation: 'h', y: 1.12, font: { size: 10 }, itemclick: 'toggle', itemdoubleclick: 'toggleothers' },
+                      }}
+                      config={{ displaylogo: false, responsive: true }}
+                      style={{ width: '100%' }}
+                      useResizeHandler
+                      onInitialized={captureLegendState}
+                      onUpdate={captureLegendState}
+                    />
+                  )}
+                </>
+              );
+            })()}
+          </Panel>
+          <Panel title="Greeks Rotation Graph (GRG)">
+            {(() => {
+              const R = 0.06; // risk-free rate (India ~6%)
+              const GREEK_KEYS = ['iv','delta','gamma','theta','vega'];
+              const GREEK_LABELS = { iv:'IV', delta:'Delta', gamma:'Gamma', theta:'Theta', vega:'Vega' };
+              const GREEK_COLORS = { iv:'#38bdf8', delta:'#22c55e', gamma:'#f59e0b', theta:'#ef4444', vega:'#a78bfa' };
+
+              // Find ATM index in sortedStrikes
+              const atmIdx = atmStrike != null
+                ? sortedStrikes.reduce((bi,s,i) => Math.abs(s-atmStrike)<Math.abs(sortedStrikes[bi]-atmStrike)?i:bi, 0)
+                : 0;
+              // Strike options for dropdown (within ±1500 of ATM)
+              const grgStrikeOptions = sortedStrikes
+                .map((s,i) => ({ label: s.toLocaleString(), value: i }))
+                .filter(({ value }) => atmStrike==null || Math.abs(sortedStrikes[value]-atmStrike)<=1500);
+              const effectiveStrikeIdx = grgStrikeIdx != null ? grgStrikeIdx : atmIdx;
+              const K = sortedStrikes[effectiveStrikeIdx];
+              const isCall = grgOptionType === 'call';
+
+              // For each expiry compute RS-Ratio per Greek (greek_at_K / greek_at_ATM * 100)
+              const seriesData = maturityGrid.map((T, ei) => {
+                const T_yr = Number(T);
+                const ivK   = Number(marketMatrix[ei]?.[sortedIndices[effectiveStrikeIdx]?.i] ?? 0);
+                const ivAtm = Number(marketMatrix[ei]?.[sortedIndices[atmIdx]?.i] ?? 0);
+                if (!(T_yr > 0) || !(ivK > 0) || !(ivAtm > 0) || !K || !atmStrike) return null;
+                const gK   = bsmGreeks(spot, K,         T_yr, ivK,   R, isCall);
+                const gAtm = bsmGreeks(spot, atmStrike, T_yr, ivAtm, R, isCall);
+                if (!gK || !gAtm) return null;
+                const days = Math.max(1, Math.round(T_yr * 365));
+                const label = expiryList[ei] ? `${expiryList[ei]} (${days}D)` : `${days}D`;
+                const ratio = {};
+                for (const k of GREEK_KEYS) {
+                  ratio[k] = gAtm[k] > 1e-10 ? (gK[k] / gAtm[k]) * 100 : null;
+                }
+                return { ei, days, label, ratio, gK };
+              }).filter(Boolean);
+
+              // Compute RS-Momentum: change in RS-Ratio per Greek between consecutive expiries, centred at 100
+              const withMomentum = seriesData.map((d, idx) => {
+                const prev = seriesData[idx - 1];
+                const mom = {};
+                for (const k of GREEK_KEYS) {
+                  if (prev && prev.ratio[k] != null && d.ratio[k] != null && prev.ratio[k] > 0) {
+                    mom[k] = ((d.ratio[k] - prev.ratio[k]) / prev.ratio[k]) * 100 + 100;
+                  } else {
+                    mom[k] = 100; // no momentum at first point
+                  }
+                }
+                return { ...d, mom };
+              });
+
+              const hasGrg = withMomentum.length >= 2;
+              // Dynamic axis bounds from actual data
+              const _allX = hasGrg ? withMomentum.flatMap(d => GREEK_KEYS.map(k => d.ratio[k]).filter(v => v!=null)) : [];
+              const _allY = hasGrg ? withMomentum.flatMap(d => GREEK_KEYS.map(k => d.mom[k]).filter(v => v!=null)) : [];
+              const _x0 = _allX.length ? Math.min(100, ..._allX) : 50;
+              const _x1 = _allX.length ? Math.max(100, ..._allX) : 150;
+              const _y0 = _allY.length ? Math.min(100, ..._allY) : 50;
+              const _y1 = _allY.length ? Math.max(100, ..._allY) : 150;
+              const _xp = Math.max(8, (_x1 - _x0) * 0.22);
+              const _yp = Math.max(8, (_y1 - _y0) * 0.22);
+              const xR = [_x0 - _xp, _x1 + _xp];
+              const yR = [_y0 - _yp, _y1 + _yp];
+              // Build plot traces: one trail + endpoint per Greek
+              const traces = hasGrg ? GREEK_KEYS.flatMap((k) => {
+                const pts = withMomentum.filter(d => d.ratio[k] != null && d.mom[k] != null);
+                if (pts.length === 0) return [];
+                const lastPt = pts[pts.length - 1];
+                return [
+                  // trail line
+                  {
+                    type: 'scatter', mode: 'lines',
+                    x: pts.map(d => d.ratio[k]),
+                    y: pts.map(d => d.mom[k]),
+                    line: { color: GREEK_COLORS[k], width: 1.5, dash: 'dot' },
+                    showlegend: false, hoverinfo: 'skip',
                   },
-                ]}
-                layout={{
-                  height: 240,
-                  margin: { l: 36, r: 12, b: 28, t: 10 },
-                  paper_bgcolor: '#0a0f19',
-                  plot_bgcolor: '#0a0f19',
-                  font: { color: '#d1d5db', size: 11 },
-                  xaxis: { title: 'Strike', gridcolor: '#1f2937' },
-                  yaxis: { title: 'IV', gridcolor: '#1f2937', tickformat: '.2%' },
-                  shapes: atmStrike != null ? [{
-                    type: 'line',
-                    x0: atmStrike,
-                    x1: atmStrike,
-                    y0: 0,
-                    y1: 1,
-                    yref: 'paper',
-                    line: { color: '#f59e0b', width: 2, dash: 'dash' },
-                  }] : [],
-                  annotations: atmStrike != null ? [{
-                    x: atmStrike,
-                    y: 1,
-                    yref: 'paper',
-                    text: `ATM ${atmStrike.toLocaleString()}`,
-                    showarrow: false,
-                    font: { color: '#f59e0b', size: 10 },
-                    xanchor: 'left',
-                    yanchor: 'top',
-                  }] : [],
-                  showlegend: false,
-                }}
-                config={{ displaylogo: false, responsive: true }}
-                style={{ width: '100%' }}
-                useResizeHandler
-              />
-            )}
+                  // all points (small)
+                  {
+                    type: 'scatter', mode: 'markers+text',
+                    x: pts.slice(0,-1).map(d => d.ratio[k]),
+                    y: pts.slice(0,-1).map(d => d.mom[k]),
+                    marker: { color: GREEK_COLORS[k], size: 5, opacity: 0.5 },
+                    text: pts.slice(0,-1).map(d => d.days+'D'),
+                    textposition: 'top center',
+                    textfont: { size: 8, color: GREEK_COLORS[k] },
+                    showlegend: false, hovertemplate: `<b>${GREEK_LABELS[k]}</b><br>%{x:.1f} / %{y:.1f}<extra></extra>`,
+                  },
+                  // current point (large)
+                  {
+                    type: 'scatter', mode: 'markers+text',
+                    x: [lastPt.ratio[k]],
+                    y: [lastPt.mom[k]],
+                    marker: { color: GREEK_COLORS[k], size: 14, line: { color: '#fff', width: 1.5 } },
+                    text: [GREEK_LABELS[k]],
+                    textposition: 'top center',
+                    textfont: { size: 10, color: GREEK_COLORS[k] },
+                    name: GREEK_LABELS[k],
+                    hovertemplate: `<b>${GREEK_LABELS[k]}</b> @ ${lastPt.label}<br>RS-Ratio: %{x:.1f}<br>RS-Mom: %{y:.1f}<br>${k==='iv'?'IV':''}${k==='delta'?'Δ':''}${k==='gamma'?'Γ':''}${k==='theta'?'Θ':''}${k==='vega'?'ν':''}: ${lastPt.gK?Number(lastPt.gK[k]).toFixed(4):'-'}<extra></extra>`,
+                  },
+                ];
+              }) : [];
+
+              const currentExpiry = withMomentum[withMomentum.length - 1];
+              return (
+                <>
+                  <div style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'8px', flexWrap:'wrap' }}>
+                    <div style={{ display:'flex', borderRadius:6, overflow:'hidden', border:'1px solid #374151' }}>
+                      {['call','put'].map(t => (
+                        <button key={t} onClick={() => setGrgOptionType(t)} style={{
+                          padding:'3px 14px', fontSize:12, cursor:'pointer', border:'none',
+                          background: grgOptionType===t ? (t==='call'?'#22c55e':'#ef4444') : '#1f2937',
+                          color: grgOptionType===t ? '#fff' : '#6b7280',
+                        }}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>
+                      ))}
+                    </div>
+                    <label style={{ color:'#9ca3af', fontSize:12 }}>
+                      Strike
+                      <select
+                        value={effectiveStrikeIdx}
+                        onChange={e => setGrgStrikeIdx(Number(e.target.value))}
+                        style={{ marginLeft:'6px', background:'#1f2937', color:'#d1d5db', border:'1px solid #374151', borderRadius:4, padding:'2px 6px' }}
+                      >
+                        <option value={atmIdx}>{atmStrike?.toLocaleString()} (ATM)</option>
+                        {grgStrikeOptions.filter(o => o.value !== atmIdx).map(o => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    {currentExpiry && (
+                      <span style={{ fontSize:11, color:'#6b7280' }}>
+                        Showing {withMomentum.length} expiries · Current: <strong style={{color:'#f59e0b'}}>{currentExpiry.label}</strong>
+                      </span>
+                    )}
+                  </div>
+                  {!hasGrg ? (
+                    <div className="snapshot-placeholder">Need ≥2 expiries to compute rotation. Load a multi-expiry snapshot.</div>
+                  ) : (
+                    <Plot
+                      data={[
+                        // Quadrant background shapes are in layout.shapes; add centre lines as traces
+                        { type:'scatter', mode:'lines', x:[xR[0],xR[1]], y:[100,100], line:{color:'#374151',width:1,dash:'dash'}, showlegend:false, hoverinfo:'skip' },
+                        { type:'scatter', mode:'lines', x:[100,100], y:[yR[0],yR[1]], line:{color:'#374151',width:1,dash:'dash'}, showlegend:false, hoverinfo:'skip' },
+                        ...traces,
+                      ]}
+                      layout={{
+                        height: 420,
+                        margin: { l:58, r:20, b:48, t:32 },
+                        paper_bgcolor:'#0a0f19', plot_bgcolor:'#0a0f19',
+                        font:{ color:'#d1d5db', size:11 },
+                        title:{ text: `${isCall?'Call':'Put'} Greeks Rotation — K=${K?.toLocaleString()}`, font:{size:13,color:'#d1d5db'}, x:0.5 },
+                        xaxis:{ title:'RS-Ratio (Greek vs ATM, 100=parity)', gridcolor:'#1f2937', range:xR, zeroline:false },
+                        yaxis:{ title:'RS-Momentum (Rate of Change, 100=flat)', gridcolor:'#1f2937', range:yR, zeroline:false },
+                        shapes:[
+                          { type:'rect', x0:xR[0], x1:100,   y0:100,   y1:yR[1], fillcolor:'rgba(56,189,248,0.06)', line:{width:0} },  // Improving
+                          { type:'rect', x0:100,   x1:xR[1], y0:100,   y1:yR[1], fillcolor:'rgba(34,197,94,0.06)',  line:{width:0} },  // Leading
+                          { type:'rect', x0:100,   x1:xR[1], y0:yR[0], y1:100,   fillcolor:'rgba(251,191,36,0.06)', line:{width:0} },  // Weakening
+                          { type:'rect', x0:xR[0], x1:100,   y0:yR[0], y1:100,   fillcolor:'rgba(239,68,68,0.06)',  line:{width:0} },  // Lagging
+                        ],
+                        annotations:[
+                          { xref:'paper', yref:'paper', x:0.02, y:0.97, text:'IMPROVING', showarrow:false, font:{color:'#38bdf8',size:11}, xanchor:'left' },
+                          { xref:'paper', yref:'paper', x:0.98, y:0.97, text:'LEADING',   showarrow:false, font:{color:'#22c55e',size:11}, xanchor:'right' },
+                          { xref:'paper', yref:'paper', x:0.98, y:0.03, text:'WEAKENING', showarrow:false, font:{color:'#f59e0b',size:11}, xanchor:'right' },
+                          { xref:'paper', yref:'paper', x:0.02, y:0.03, text:'LAGGING',   showarrow:false, font:{color:'#ef4444',size:11}, xanchor:'left' },
+                        ],
+                        legend:{ orientation:'h', y:1.08, font:{size:10} },
+                        showlegend: true,
+                      }}
+                      config={{ displaylogo:false, responsive:true }}
+                      style={{ width:'100%' }}
+                      useResizeHandler
+                    />
+                  )}
+                  {hasGrg && currentExpiry?.gK && (
+                    <div className="metric-strip" style={{marginTop:6}}>
+                      <div><span>IV</span><strong style={{color:'#38bdf8'}}>{Number(currentExpiry.gK.iv).toFixed(2)}%</strong></div>
+                      <div><span>{isCall?'Call':'Put'} Δ</span><strong style={{color:'#22c55e'}}>{Number(currentExpiry.gK.delta).toFixed(4)}</strong></div>
+                      <div><span>Γ</span><strong style={{color:'#f59e0b'}}>{Number(currentExpiry.gK.gamma).toFixed(6)}</strong></div>
+                      <div><span>Θ/day</span><strong style={{color:'#ef4444'}}>-{Number(currentExpiry.gK.theta).toFixed(2)}</strong></div>
+                      <div><span>ν (Vega)</span><strong style={{color:'#a78bfa'}}>{Number(currentExpiry.gK.vega).toFixed(2)}</strong></div>
+                      <div><span>Price</span><strong style={{color:'#d1d5db'}}>₹{Number(currentExpiry.gK.price).toFixed(2)}</strong></div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </Panel>
           <Panel title="VRP Area Plot">
             <div className="filters-grid" style={{ gridTemplateColumns: '1fr' }}>

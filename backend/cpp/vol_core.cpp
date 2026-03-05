@@ -983,6 +983,147 @@ static py::list batch_evaluate_strategies(
 
 
 // ═══════════════════════════════════════════════════════════════════════
+// 8.  DEALER POSITIONING ENGINE (Vectorized Greeks & Exposures)
+// ═══════════════════════════════════════════════════════════════════════
+
+static py::dict compute_dealer_positioning(
+    double spot,
+    double T,
+    double r,
+    py::array_t<double, py::array::c_style> strikes,
+    py::array_t<int, py::array::c_style> option_types, // 0=Call, 1=Put
+    py::array_t<double, py::array::c_style> ivs,
+    py::array_t<double, py::array::c_style> open_interests
+) {
+    auto sk = strikes.unchecked<1>();
+    auto ot = option_types.unchecked<1>();
+    auto iv = ivs.unchecked<1>();
+    auto oi = open_interests.unchecked<1>();
+    
+    int n = (int)sk.shape(0);
+    
+    auto out_delta = py::array_t<double>({(py::ssize_t)n});
+    auto out_gamma = py::array_t<double>({(py::ssize_t)n});
+    auto out_vanna = py::array_t<double>({(py::ssize_t)n});
+    auto out_charm = py::array_t<double>({(py::ssize_t)n});
+    
+    auto out_gex = py::array_t<double>({(py::ssize_t)n});
+    auto out_vex = py::array_t<double>({(py::ssize_t)n});
+    auto out_cex = py::array_t<double>({(py::ssize_t)n});
+    auto out_dex = py::array_t<double>({(py::ssize_t)n});
+
+    double* d_ptr = out_delta.mutable_data();
+    double* g_ptr = out_gamma.mutable_data();
+    double* v_ptr = out_vanna.mutable_data();
+    double* c_ptr = out_charm.mutable_data();
+    
+    double* gex_ptr = out_gex.mutable_data();
+    double* vex_ptr = out_vex.mutable_data();
+    double* cex_ptr = out_cex.mutable_data();
+    double* dex_ptr = out_dex.mutable_data();
+
+    double total_gex = 0.0;
+    double total_vex = 0.0;
+    double total_cex = 0.0;
+    double total_dex = 0.0;
+
+    double T_safe = std::max(T, 1e-8);
+    double sqrt_T = std::sqrt(T_safe);
+
+    // Assuming contract size multiplier for index options (NIFTY is 25, we assume 1.0 here and scale in Python,
+    // or standard: typical is option volume * 100 on US, Nifty * 25. Let's return per-share exposure here,
+    // and let Python multiply by lot size * spot).
+    // Actually standard GEX is: Gamma * OI * Spot * Spot * 0.01 
+    // Wait, the formula is GEX = Gamma * OI * 100 * Spot^2 * 0.01 (where 100 is lot size).
+    // Let's compute everything per 1 unit of OI, and let Python scale by LotSize * spot * 100 as needed.
+    // For VEX: Vanna * OI * 100 * Spot
+    // For CEX: Charm * OI * 100 * Spot * 365
+    // Let's just return per-contract Greeks and scaled exposures. 
+    // We will assume 1 contract = 1 unit for now, Python scales by lot_size.
+
+    for (int i = 0; i < n; ++i) {
+        double k = sk(i);
+        int opt_type = ot(i); // 0=Call, 1=Put
+        double sigma = std::max(iv(i), 1e-8);
+        double open_int = oi(i);
+
+        double d1 = (std::log(spot / k) + (r + 0.5 * sigma * sigma) * T_safe) / (sigma * sqrt_T);
+        double d2 = d1 - sigma * sqrt_T;
+
+        double norm_cdf_d1 = _norm_cdf(d1);
+        double norm_pdf_d1 = _norm_pdf(d1);
+
+        // BS Greeks
+        double delta = (opt_type == 0) ? norm_cdf_d1 : (norm_cdf_d1 - 1.0);
+        double gamma = norm_pdf_d1 / (spot * sigma * sqrt_T);
+        // Vanna = dVega/dSpot or dDelta/dVol = -Vega * d1 / (spot * sigma * sqrt_T)
+        // Vanna analytical: -norm_pdf(d1) * d2 / sigma
+        double vanna = -norm_pdf_d1 * d2 / sigma;
+        // Charm = -dDelta/dTime. 
+        // Analytical for Call: norm_pdf(d1) * [ (r/(sigma*sqrt_T)) - d2/(2*T) ]
+        // Put Charm: Call Charm - r * exp(-rT) [assuming no div yield]
+        double charm = 0.0;
+        double charm_call = norm_pdf_d1 * ((r / (sigma * sqrt_T)) - (d2 / (2.0 * T_safe)));
+        if (opt_type == 0) {
+            charm = charm_call;
+        } else {
+            charm = charm_call - r * std::exp(-r * T_safe); // Simplified charm for non-dividend
+        }
+
+        d_ptr[i] = delta;
+        g_ptr[i] = gamma;
+        v_ptr[i] = vanna;
+        c_ptr[i] = charm;
+
+        // Dealer Exposure calculations
+        // Assumption: Customers buy Calls and buy Puts.
+        // Therefore, Dealer is SHORT Calls and SHORT Puts.
+        // Dealer Gamma = - Customer Gamma = -Gamma
+        // Wait, standard assumption: Calls are bought by customers (Dealer short Call), Puts are bought by customers (Dealer short Put).
+        // Let's use the standard "GEX" convention: Call GEX is positive (Dealer is long gamma because customer bought call? No, usually customer buys both. Actually standard SqueezeMetrics assumption is Dealer is SHORT puts and SHORT calls. So dealer gamma < 0. But often Calls are bought by dealers from covered call sellers. So Dealer is LONG Calls, SHORT Puts.)
+        // We leave the direction logic to python, or apply standard convention:
+        // direction = (opt_type == 0) ? 1.0 : -1.0; (Calls are Dealer Long, Puts are Dealer Short)
+        double direction = (opt_type == 0) ? 1.0 : -1.0; 
+
+        // Raw exposures per unit OI
+        // Python will scale these by (Lot Size) and Spot to get actual notional $.
+        double gex = gamma * open_int * direction;
+        double vex = vanna * open_int * direction;
+        double cex = charm * open_int * direction;
+        double dex = delta * open_int * direction;
+
+        gex_ptr[i] = gex;
+        vex_ptr[i] = vex;
+        cex_ptr[i] = cex;
+        dex_ptr[i] = dex;
+
+        total_gex += gex;
+        total_vex += vex;
+        total_cex += cex;
+        total_dex += dex;
+    }
+
+    py::dict result;
+    result["delta"] = out_delta;
+    result["gamma"] = out_gamma;
+    result["vanna"] = out_vanna;
+    result["charm"] = out_charm;
+    
+    result["gex"] = out_gex;
+    result["vex"] = out_vex;
+    result["cex"] = out_cex;
+    result["dex"] = out_dex;
+    
+    result["total_gex"] = total_gex;
+    result["total_vex"] = total_vex;
+    result["total_cex"] = total_cex;
+    result["total_dex"] = total_dex;
+
+    return result;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
 //  PYBIND11 MODULE
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -1031,4 +1172,9 @@ PYBIND11_MODULE(vol_core, m) {
     m.def("batch_evaluate_strategies", &batch_evaluate_strategies,
         py::arg("terminal_prices"), py::arg("strategy_list"), py::arg("spot"),
         "Evaluate multiple strategies in a single C++ call.");
+
+    m.def("compute_dealer_positioning", &compute_dealer_positioning,
+        py::arg("spot"), py::arg("T"), py::arg("r"), 
+        py::arg("strikes"), py::arg("option_types"), py::arg("ivs"), py::arg("open_interests"),
+        "Compute Black-Scholes Greeks and Market Maker Exposures arrays natively.");
 }

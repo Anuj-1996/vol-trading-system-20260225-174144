@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import Plot from 'react-plotly.js';
+import Plot from '../ThemedPlot';
 import { Panel, formatNumber } from './shared';
 import { fetchDealerPositioning, aiChatStream } from '../../api/client';
 

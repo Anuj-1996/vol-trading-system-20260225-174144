@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import Plot from 'react-plotly.js';
+import Plot from '../ThemedPlot';
 import { aiStrategyPick, portfolioAdd } from '../../api/client';
 import { Panel, SnapshotGuard, formatNumber, formatRs, formatPctVal, NIFTY_LOT_SIZE } from './shared.jsx';
 

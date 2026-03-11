@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useRef, useCallback } from 'react';
-import Plot from 'react-plotly.js';
+import Plot from '../ThemedPlot';
 import { Panel, SnapshotGuard, formatNumber, formatPct } from './shared.jsx';
 
 function safeNum(value) {

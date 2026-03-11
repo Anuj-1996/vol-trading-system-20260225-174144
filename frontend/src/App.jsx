@@ -20,7 +20,7 @@ import StrategyScreenerPage from './components/pages/StrategyScreenerPage';
 import SurfacePage from './components/pages/SurfacePage';
 import { Panel, formatNumber } from './components/pages/shared.jsx';
 import { useSnapshotStore } from './store/useSnapshotStore';
-
+import { ThemeContext, THEME_OPTIONS, THEME_STORAGE_KEY } from './theme';
 const INITIAL_FORM = {
   spot: 0,
   risk_free_rate: 0.065,
@@ -62,6 +62,12 @@ export default function App() {
   const [fetchProgress, setFetchProgress] = useState('');
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [lastPipelineData, setLastPipelineData] = useState(null);
+  const [themeMode, setThemeMode] = useState(() => {
+    if (typeof window === 'undefined') {
+      return 'light-dark';
+    }
+    return window.localStorage.getItem(THEME_STORAGE_KEY) || 'light-dark';
+  });
 
   const {
     activeSnapshotId,
@@ -88,6 +94,12 @@ export default function App() {
     const timer = setInterval(() => setClockValue(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+    }
+  }, [themeMode]);
 
   const fetchLogsOnce = async () => {
     try {
@@ -320,6 +332,15 @@ export default function App() {
     return Math.max(0, Math.min(parsed, maturityGrid.length - 1));
   }, [selectedExpiry, surface]);
 
+  const regimeLabel = useMemo(() => {
+    const raw = market?.regime?.label;
+    if (!raw) return '-';
+    return String(raw)
+      .split('_')
+      .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+      .join(' ');
+  }, [market]);
+
   const backendStatusClass =
     backendStatus === 'connected'
       ? 'status-text-ok'
@@ -446,96 +467,118 @@ export default function App() {
   };
 
   return (
-    <div className={`bbg-shell${aiPanelOpen ? ' ai-open' : ''}`}>
-      <div className="bbg-main">
-        <header className="top-nav-bar">
-          <div className="brand">VOL TRADING</div>
-          <nav className="nav-strip">
-            {NAV_ITEMS.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                className={activePage === item.key ? 'nav-item active' : 'nav-item'}
-                onClick={() => setActivePage(item.key)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-        </header>
-
-        <header className="top-status-bar">
-          <label>
-            Underlying
-            <select value={underlying} onChange={(event) => setUnderlying(event.target.value)}>
-              <option value="NIFTY">NIFTY</option>
-              <option value="BANKNIFTY">BANKNIFTY</option>
-            </select>
-          </label>
-          <label>
-            Expiry
-            <select value={selectedExpiry} onChange={(event) => setSelectedExpiry(event.target.value)}>
-              {selectedExpiryOptions.map((item) => (
-                <option key={item.value} value={item.value}>
+    <ThemeContext.Provider value={themeMode}>
+      <div className={`bbg-shell theme-${themeMode}${aiPanelOpen ? ' ai-open' : ''}`}>
+        <div className="bbg-main">
+          <header className="top-nav-bar">
+            <div className="brand">VOL TRADING</div>
+            <nav className="nav-strip">
+              {NAV_ITEMS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={activePage === item.key ? 'nav-item active' : 'nav-item'}
+                  onClick={() => setActivePage(item.key)}
+                >
                   {item.label}
-                </option>
+                </button>
               ))}
-            </select>
-          </label>
-          <div className="top-metric"><span>Spot</span><strong>{formatNumber(market?.spot || form.spot, 2)}</strong></div>
-          <div className="top-metric"><span>IV ATM</span><strong>{market?.atm_iv != null ? (Number(market.atm_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
-          <div className="top-metric"><span>Regime</span><strong style={{ color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e' }}>{market?.regime?.label || '-'}</strong></div>
-          <div className="top-metric"><span>Source</span><strong className='status-text-ok'>NSE Live</strong></div>
-          <div className="top-metric"><span>Clock</span><strong>{clockValue.toLocaleTimeString()}</strong></div>
-          <button type="button" className="action-btn accent" onClick={runLive} disabled={loading}>
-            {loading ? 'Running...' : 'Fetch Live & Analyse'}
-          </button>
-        </header>
+            </nav>
+            <div className="theme-switcher" aria-label="Theme mode switcher">
+              {THEME_OPTIONS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  className={themeMode === option.key ? 'theme-switch-btn active' : 'theme-switch-btn'}
+                  onClick={() => setThemeMode(option.key)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </header>
 
-        {error ? <div className="error-box">{error}</div> : null}
+          <header className="top-status-bar">
+            <label>
+              Underlying
+              <select value={underlying} onChange={(event) => setUnderlying(event.target.value)} title="Current live pipeline is configured for NIFTY.">
+                <option value="NIFTY">NIFTY</option>
+                <option value="BANKNIFTY" disabled>BANKNIFTY (Unavailable)</option>
+              </select>
+            </label>
+            <label>
+              View Expiry
+              <select
+                value={selectedExpiry}
+                onChange={(event) => setSelectedExpiry(event.target.value)}
+                disabled={!selectedExpiryOptions.length || selectedExpiryOptions.length === 1}
+                title="Changes the selected expiry slice across supported views."
+              >
+                {selectedExpiryOptions.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="top-metric"><span>Spot</span><strong>{formatNumber(market?.spot || form.spot, 2)}</strong></div>
+            <div className="top-metric"><span>IV ATM</span><strong>{market?.atm_iv != null ? (Number(market.atm_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
+            <div className="top-metric" title="Model-derived market state indicator. Informational only.">
+              <span>Regime</span>
+              <strong style={{ color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e' }}>{regimeLabel}</strong>
+            </div>
+            <div className="top-metric"><span>Source</span><strong className="status-text-ok">NSE Live</strong></div>
+            <div className="top-metric"><span>Clock</span><strong>{clockValue.toLocaleTimeString()}</strong></div>
+            <button type="button" className="action-btn accent" onClick={runLive} disabled={loading}>
+              {loading ? 'Running...' : 'Fetch Live & Analyse'}
+            </button>
+          </header>
 
-        {loading && fetchProgress && (
-          <div className="loading-overlay">
-            <div className="loading-overlay-content">
-              <div className="spinner-ring" />
-              <div className="loading-step-text">{fetchProgress}</div>
-              <div className="loading-steps-list">
-                {PROGRESS_STEPS.map((step, idx) => {
-                  const currentIdx = PROGRESS_STEPS.indexOf(fetchProgress);
-                  const isDone = idx < currentIdx;
-                  const isActive = idx === currentIdx;
-                  return (
-                    <div key={step} className={`loading-step-item ${isDone ? 'done' : ''} ${isActive ? 'active' : ''}`}>
-                      <span className="step-icon">{isDone ? '\u2713' : isActive ? '\u25CF' : '\u25CB'}</span>
-                      <span>{step}</span>
-                    </div>
-                  );
-                })}
+          {error ? <div className="error-box">{error}</div> : null}
+
+          {loading && fetchProgress && (
+            <div className="loading-overlay">
+              <div className="loading-overlay-content">
+                <div className="spinner-ring" />
+                <div className="loading-step-text">{fetchProgress}</div>
+                <div className="loading-steps-list">
+                  {PROGRESS_STEPS.map((step, idx) => {
+                    const currentIdx = PROGRESS_STEPS.indexOf(fetchProgress);
+                    const isDone = idx < currentIdx;
+                    const isActive = idx === currentIdx;
+                    return (
+                      <div key={step} className={`loading-step-item ${isDone ? 'done' : ''} ${isActive ? 'active' : ''}`}>
+                        <span className="step-icon">{isDone ? '\u2713' : isActive ? '\u25CF' : '\u25CB'}</span>
+                        <span>{step}</span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        <main className="content-area">{renderActivePage()}</main>
+          <main className="content-area">{renderActivePage()}</main>
 
-        <footer className="bottom-strip">
-          <div><span>Job status</span><strong>{dynamicState}</strong></div>
-          <div><span>Backend</span><strong className={backendStatusClass}>{backendStatus}</strong></div>
-          <div><span>Data</span><strong className={calibrationStatusClass}>{liveMetadata ? `NSE ${liveMetadata.symbol}` : 'pending'}</strong></div>
-          <div><span>Records</span><strong>{liveMetadata ? liveMetadata.quality_report?.total_cleaned ?? '-' : (market?.ingestion?.record_count ?? '-')}</strong></div>
-          <div><span>Snapshot</span><strong>{activeSnapshotId || '-'}</strong></div>
-        </footer>
+          <footer className="bottom-strip">
+            <div><span>Job status</span><strong>{dynamicState}</strong></div>
+            <div><span>Backend</span><strong className={backendStatusClass}>{backendStatus}</strong></div>
+            <div><span>Data</span><strong className={calibrationStatusClass}>{liveMetadata ? `NSE ${liveMetadata.symbol}` : 'pending'}</strong></div>
+            <div><span>Records</span><strong>{liveMetadata ? liveMetadata.quality_report?.total_cleaned ?? '-' : (market?.ingestion?.record_count ?? '-')}</strong></div>
+            <div><span>Snapshot</span><strong>{activeSnapshotId || '-'}</strong></div>
+          </footer>
+        </div>
+
+        <AICopilotPanel
+          pipelineData={lastPipelineData}
+          isOpen={aiPanelOpen}
+          onToggle={() => setAiPanelOpen((prev) => !prev)}
+          dataId={liveMetadata?.data_id || null}
+          onRecalibrated={(recalData) => {
+            applyRecalibratedData(recalData);
+          }}
+        />
       </div>
-
-      <AICopilotPanel
-        pipelineData={lastPipelineData}
-        isOpen={aiPanelOpen}
-        onToggle={() => setAiPanelOpen((prev) => !prev)}
-        dataId={liveMetadata?.data_id || null}
-        onRecalibrated={(recalData) => {
-          applyRecalibratedData(recalData);
-        }}
-      />
-    </div>
+    </ThemeContext.Provider>
   );
 }

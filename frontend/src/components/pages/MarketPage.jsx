@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import Plot from 'react-plotly.js';
+import Plot from '../ThemedPlot';
 import { Panel, SnapshotGuard, formatNumber, formatPct } from './shared.jsx';
 
 function logGamma(z) {
@@ -316,6 +316,11 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
   const priceCompLegendStateRef = useRef({});
   const [grgStrikeIdx, setGrgStrikeIdx] = useState(null);   // null = auto ATM
   const [grgOptionType, setGrgOptionType] = useState('call'); // 'call' | 'put'
+
+  useEffect(() => {
+    setSkewExpiryIndex(selectedExpiryIndex);
+    setPriceCompExpiryIndex(selectedExpiryIndex);
+  }, [selectedExpiryIndex]);
 
   const strikeGrid = Array.isArray(surface?.strike_grid) ? surface.strike_grid : [];
   const marketMatrix = Array.isArray(surface?.market_iv_matrix) ? surface.market_iv_matrix : [];
@@ -1768,5 +1773,4 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
     </SnapshotGuard>
   );
 }
-
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import Plot from 'react-plotly.js';
+import Plot from '../ThemedPlot';
 import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
 
 const SHORT_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];

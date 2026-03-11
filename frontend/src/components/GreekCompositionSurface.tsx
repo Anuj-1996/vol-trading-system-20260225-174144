@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import Plot from 'react-plotly.js';
+import Plot from './ThemedPlot';
 
 export type GreekCompositionDatum = {
   strike: number;

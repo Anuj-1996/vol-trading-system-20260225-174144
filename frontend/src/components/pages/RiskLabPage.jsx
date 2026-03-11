@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import Plot from 'react-plotly.js';
+import Plot from '../ThemedPlot';
 import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
 
 /* ── KDE builder (Gaussian kernel density estimate) ── */

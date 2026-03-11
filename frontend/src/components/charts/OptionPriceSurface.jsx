@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import Plot from 'react-plotly.js';
+import Plot from '../ThemedPlot';
 
 /**
  * Option Price Surface (3D)

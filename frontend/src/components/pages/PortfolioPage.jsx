@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import Plot from 'react-plotly.js';
+import Plot from '../ThemedPlot';
 import { portfolioList, portfolioDelete, portfolioClear, portfolioRevalue } from '../../api/client';
 import { Panel, formatNumber, formatRs, formatPctVal } from './shared.jsx';
 

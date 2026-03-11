@@ -1,5 +1,5 @@
 import React from 'react';
-import Plot from 'react-plotly.js';
+import Plot from './ThemedPlot';
 
 const SHORT_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function formatExpiryLabel(label) {

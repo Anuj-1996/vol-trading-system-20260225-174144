@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import Plot from 'react-plotly.js';
+import Plot from '../ThemedPlot';
 import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
 
 export default function BacktestPage({ loading, activeSnapshotId, backtest }) {

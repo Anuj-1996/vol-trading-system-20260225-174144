@@ -12,6 +12,7 @@ import AICopilotPanel from './components/AICopilotPanel';
 import BacktestPage from './components/pages/BacktestPage';
 import DealerPositioningPage from './components/pages/DealerPositioningPage';
 import MarketPage from './components/pages/MarketPage';
+import OptionChainPage from './components/pages/OptionChainPage';
 import PortfolioPage from './components/pages/PortfolioPage';
 import RegimeMLPage from './components/pages/RegimeMLPage';
 import RiskLabPage from './components/pages/RiskLabPage';
@@ -36,6 +37,7 @@ const INITIAL_FORM = {
 
 const NAV_ITEMS = [
   { key: 'market', label: 'Market' },
+  { key: 'option_chain', label: 'Option Chain' },
   { key: 'surface', label: 'Vol Surface' },
   { key: 'positioning', label: 'Dealer Positioning' },
   { key: 'regime_ml', label: 'Regime ML' },
@@ -410,6 +412,20 @@ export default function App() {
           onExpiryIndexChange={(nextIndex) => setSelectedExpiry(String(nextIndex))}
           onRecalibrate={handleQuickRecalibrate}
           canRecalibrate={Boolean(liveMetadata?.data_id)}
+        />
+      );
+    }
+    if (activePage === 'option_chain') {
+      return (
+        <OptionChainPage
+          loading={loading}
+          activeSnapshotId={activeSnapshotId}
+          liveDataId={liveMetadata?.data_id}
+          underlying={underlying}
+          market={market}
+          surface={surface}
+          selectedExpiryIndex={selectedExpiryIndex}
+          onExpiryIndexChange={(nextIndex) => setSelectedExpiry(String(nextIndex))}
         />
       );
     }

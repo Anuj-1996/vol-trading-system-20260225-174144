@@ -48,6 +48,7 @@ class PositioningService:
         agg_vex_curve = defaultdict(float)
         agg_cex_curve = defaultdict(float)
         agg_dex_curve = defaultdict(float)
+        agg_dex_profile = defaultdict(float)
         
         # Heatmap: per-expiry GEX by strike
         heatmap_data = {}  # { expiry_str: { strike: gex } }
@@ -110,15 +111,18 @@ class PositioningService:
             expiry_heatmap = defaultdict(float)
             
             # Aggregate Curves by Strike
-            for st, g, v, c in zip(
+            dex_curve = res["curves"].get("dex", [0.0] * len(res["curves"]["strikes"]))
+            for st, g, v, c, d in zip(
                 res["curves"]["strikes"], 
                 res["curves"]["gex"], 
                 res["curves"]["vex"], 
                 res["curves"]["cex"],
+                dex_curve,
             ):
                 agg_gex_curve[st] += g
                 agg_vex_curve[st] += v
                 agg_cex_curve[st] += c
+                agg_dex_profile[st] += d
                 expiry_heatmap[st] += g
             
             heatmap_data[expiry_str] = dict(expiry_heatmap)
@@ -191,6 +195,7 @@ class PositioningService:
         final_gex_curve = [agg_gex_curve[k] for k in unique_strikes]
         final_vex_curve = [agg_vex_curve[k] for k in unique_strikes]
         final_cex_curve = [agg_cex_curve[k] for k in unique_strikes]
+        final_dex_curve = [agg_dex_profile[k] for k in unique_strikes]
         
         # ── Heatmap: build matrix (expiries × strikes) ──
         sorted_expiries = sorted(heatmap_data.keys())
@@ -302,7 +307,8 @@ class PositioningService:
                 "strikes": unique_strikes,
                 "gex": final_gex_curve,
                 "vex": final_vex_curve,
-                "cex": final_cex_curve
+                "cex": final_cex_curve,
+                "dex": final_dex_curve,
             },
             "snapshots": {
                 "hedge_flow_spot_range": hedge_profile["spots"],

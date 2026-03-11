@@ -633,6 +633,249 @@ textarea {
   gap: 8px;
 }
 
+.page-option-chain-grid {
+  display: block;
+}
+
+.option-chain-toolbar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.option-chain-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.7rem;
+  color: #9ca3af;
+}
+
+.option-chain-toolbar select {
+  background: var(--input-bg);
+  border: 1px solid #374151;
+  color: #d1d5db;
+  padding: 5px 6px;
+  font-size: 0.74rem;
+}
+
+.option-chain-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.option-chain-kpi-grid div {
+  border: 1px solid #1f2937;
+  background: var(--card-bg);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.option-chain-kpi-grid span {
+  color: #94a3b8;
+  font-size: 0.66rem;
+}
+
+.option-chain-kpi-grid strong {
+  color: #f8fafc;
+  font-size: 0.78rem;
+}
+
+.option-chain-table-wrap {
+  overflow-x: auto;
+}
+
+.option-chain-table {
+  min-width: 1720px;
+}
+
+.option-chain-table.dense-table th,
+.option-chain-table.dense-table td {
+  text-align: center !important;
+  vertical-align: middle;
+}
+
+.option-chain-row td {
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.option-chain-row:hover td {
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.option-chain-row.atm td {
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.option-chain-row.flip-zone td {
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.4);
+}
+
+.option-chain-row.wall-zone td {
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.25);
+}
+
+.option-chain-row .call-side {
+  color: #22c55e;
+  font-weight: 600;
+}
+
+.option-chain-row .put-side {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.option-chain-table .strike-cell {
+  text-align: center !important;
+}
+
+.strike-cell small {
+  display: block;
+  color: #6b7280;
+  font-size: 0.62rem;
+  margin-top: 2px;
+}
+
+.option-chain-center {
+  text-align: center;
+}
+
+.option-chain-signal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.option-chain-signal-card {
+  border: 1px solid #1f2937;
+  background: var(--card-bg);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.option-chain-signal-card span {
+  color: #94a3b8;
+  font-size: 0.66rem;
+}
+
+.option-chain-signal-card strong {
+  color: #f8fafc;
+  font-size: 0.78rem;
+}
+
+.option-chain-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 8px;
+  font-size: 0.68rem;
+}
+
+.option-chain-legend .stabilizing {
+  color: #22c55e;
+}
+
+.option-chain-legend .destabilizing {
+  color: #ef4444;
+}
+
+.option-chain-legend .vol-sensitive {
+  color: #38bdf8;
+}
+
+.exposure-cell {
+  min-width: 112px;
+}
+
+.exposure-bar {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  margin-top: 4px;
+  background: #111827;
+  overflow: hidden;
+}
+
+.exposure-bar-fill {
+  position: absolute;
+  inset: 0;
+}
+
+.exposure-bar-fill.positive,
+.exposure-tag.positive {
+  background: rgba(34, 197, 94, 0.8);
+  color: #86efac;
+}
+
+.exposure-bar-fill.negative,
+.exposure-tag.negative {
+  background: rgba(239, 68, 68, 0.8);
+  color: #fca5a5;
+}
+
+.exposure-bar-fill.vega,
+.exposure-tag.vega {
+  background: rgba(56, 189, 248, 0.8);
+  color: #7dd3fc;
+}
+
+.exposure-bar-fill.charm,
+.exposure-tag.charm {
+  background: rgba(251, 146, 60, 0.8);
+  color: #fdba74;
+}
+
+.exposure-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 74px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 0.64rem;
+  font-weight: 700;
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+}
+
+.exposure-tag.wall {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+}
+
+.exposure-tag.flip {
+  background: rgba(59, 130, 246, 0.16);
+  color: #60a5fa;
+}
+
+.oi-cell {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+}
+
+.oi-bar {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  background: #111827;
+  overflow: hidden;
+}
+
+.oi-bar-fill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, #38bdf8, #f59e0b);
+}
+
 .backtest-controls {
   grid-column: 1 / span 2;
 }
@@ -1122,6 +1365,7 @@ textarea {
   .page-backtest-grid,
   .page-portfolio-grid,
   .page-settings-grid,
+  .page-option-chain-grid,
   .dealer-positioning-grid {
     grid-template-columns: 1fr;
   }
@@ -1136,6 +1380,11 @@ textarea {
 
   .screener-filters-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .option-chain-toolbar,
+  .option-chain-kpi-grid {
+    grid-template-columns: 1fr;
   }
 
   .portfolio-top {

@@ -655,10 +655,10 @@ class StrategyEngineService:
 
     def _map_underlying_to_ticker(self, file_path: str) -> str:
         file_upper = Path(file_path).name.upper()
-        if "NIFTY" in file_upper:
-            return "^NSEI"
         if "BANKNIFTY" in file_upper:
             return "^NSEBANK"
+        if "NIFTY" in file_upper:
+            return "^NSEI"
         return "^NSEI"
 
     @staticmethod

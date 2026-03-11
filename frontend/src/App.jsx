@@ -501,9 +501,16 @@ export default function App() {
           <header className="top-status-bar">
             <label>
               Underlying
-              <select value={underlying} onChange={(event) => setUnderlying(event.target.value)} title="Current live pipeline is configured for NIFTY.">
+              <select
+                value={underlying}
+                onChange={(event) => {
+                  setUnderlying(event.target.value);
+                  setSelectedExpiry('auto');
+                }}
+                title="Choose the live NSE index to fetch."
+              >
                 <option value="NIFTY">NIFTY</option>
-                <option value="BANKNIFTY" disabled>BANKNIFTY (Unavailable)</option>
+                <option value="BANKNIFTY">BANKNIFTY</option>
               </select>
             </label>
             <label>

@@ -1,0 +1,205 @@
+# Vol Trading Dashboard - Chart & UI Component Inventory
+
+## Page 1: Market Dashboard
+**Total Components: 6 Charts, 6 Metric Cards**
+
+### Metric Cards
+- **Spot Price**: Current NIFTY 50 index level.
+- **ATM IV**: At-the-money implied volatility.
+- **IV Rank**: Relative rank of current IV over 1 year (0-100).
+- **IV Percentile**: Percentage of days in the past year with LOWER IV.
+- **VRP (Vol Risk Premium)**: Spread between ATM IV and Realized Vol.
+- **RV (Realized Volatility)**: Statistically calculated vol (10D, 20D, 60D).
+
+### Charts
+1. **Price & Vol History**
+   - **X-axis**: Date (Time)
+   - **Y-axis**: Price (₹) / Volatility (%)
+   - **Detail**: Multi-trace chart showing Spot Price, RV20, and ATM IV proxy.
+2. **IV Term Structure**
+   - **X-axis**: Days to Expiry (DTE)
+   - **Y-axis**: Implied Volatility (%)
+   - **Detail**: Shows how vol changes across different maturity dates.
+3. **Volatility Skew / Smile**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Implied Volatility (%)
+   - **Detail**: Visualizes the "smile" or "skew" for a selected expiry.
+4. **Volume & Open Interest Profile**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Contract Count (OI / Volume)
+   - **Detail**: Bar chart comparing liquidity and positioning across strikes.
+5. **Option Price Decomposition (Stacked Bar)**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Price (₹)
+   - **Detail**: Breaks down option premium into Intrinsic, Time, and Volatility value.
+6. **Greeks Rotation Graph (GRG)**
+   - **X-axis**: RS-Ratio (Greek vs ATM Relative Strength)
+   - **Y-axis**: RS-Momentum (Rate of change of relative strength)
+   - **Detail**: Quadrant plot (Leading, Improving, Lagging, Weakening) for Delta, Gamma, Vega, Theta.
+
+---
+
+## Page 2: Vol Surface (Stochastic Modeling)
+**Total Components: 6 Charts, 1 Diagnostic Panel**
+
+### Charts
+1. **Market + Model Combined Surface 3D**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Expiry (Time to Maturity)
+   - **Z-axis**: Implied Volatility (%)
+   - **Detail**: Overlays the sparse Market IV grid with the smooth Heston Model surface.
+2. **Market IV Surface 3D**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Expiry
+   - **Z-axis**: Market Implied Vol
+3. **Model IV Surface 3D**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Expiry
+   - **Z-axis**: Calibrated Heston Implied Vol
+4. **Residual IV Surface 3D (Error Map)**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Expiry
+   - **Z-axis**: Difference (Market IV - Model IV)
+   - **Detail**: Highlights where the model fits or fails to match market reality.
+5. **Distribution Plots (KDE)**
+   - **X-axis**: Implied Volatility
+   - **Y-axis**: Probabilitiy Density
+   - **Detail**: Kernel Density Estimate (KDE) of the vol distribution.
+6. **Frequency-Domain Volatility (Spectral Power)**
+   - **X-axis**: Strike Frequency (cycles per step)
+   - **Y-axis**: Maturity Frequency (cycles per step)
+   - **Z-axis**: Spectral Power (Log scale)
+   - **Detail**: 2D Fast Fourier Transform (FFT) analysis of the vol surface noise/patterns.
+
+---
+
+## Page 3: Dealer Positioning (GEX/Vanna/Charm)
+**Total Components: 10 Charts, 6 Metric Cards**
+
+### Metric Cards
+- **Regime**: Market stability state (e.g., Stabilized, Volatile).
+- **Gamma Flip**: The price level where dealer gamma turns from Positive to Negative.
+- **ATM IV / RV**: Current market vol vs historical realized vol.
+- **Total GEX**: Aggregate Gamma Exposure (Crores).
+- **Total VEX**: Aggregate Vanna Exposure (Crores).
+- **Total CEX**: Aggregate Charm Exposure (Crores).
+
+### Charts
+1. **Gamma Exposure by Strike**
+   - **X-axis**: Strike Price
+   - **Y-axis**: GEX (₹)
+   - **Detail**: Bar chart showing Put vs Call Gamma per strike.
+2. **Gamma Clusters (Institutional Walls)**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Total GEX Cluster
+   - **Detail**: Uses K-Means clustering to identify major support/resistance "walls".
+3. **3D Gamma Surface**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Expiry
+   - **Z-axis**: Gamma Exposure (GEX)
+4. **Cumulative Gamma Profile**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Cumulative GEX (₹)
+   - **Detail**: Shows the "Weight of Gamma" across the price ladder.
+5. **Vanna Exposure by Strike**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Vanna (₹)
+   - **Detail**: Sensitivity of Delta to changes in Volatility.
+6. **Charm Exposure by Strike**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Charm (₹)
+   - **Detail**: Sensitivity of Delta to the passage of time (Time Decay of Delta).
+7. **Gamma Regime Curve (GEX vs Spot)**
+   - **X-axis**: Simulated Spot Price
+   - **Y-axis**: Total GEX
+   - **Detail**: Identifies the Gamma Flip level and dealer hedging "cushion".
+8. **Dealer Hedge Flow vs Price**
+   - **X-axis**: Simulated Spot Price
+   - **Y-axis**: Expected Dealer Delta Hedge
+9. **Volatility Suppression Map**
+   - **X-axis**: Strike Price
+   - **Y-axis**: Suppression Zone
+   - **Detail**: Heatmap of where dealer flows likely suppress market volatility.
+10. **Gamma Density Distribution**
+    - **X-axis**: Gamma Bin Centers
+    - **Y-axis**: Frequency/Counts
+
+---
+
+## Page 4: Risk Lab
+**Total Components: 2 Charts, 4 Metric Cards**
+
+### Metric Cards
+- **Net Delta**: Directional exposure.
+- **Net Gamma**: Exposure to price acceleration.
+- **Net Vega**: Exposure to volatility changes.
+- **Net Theta**: Daily time decay.
+
+### Charts
+1. **Strategy Payoff (Hold to Maturity)**
+   - **X-axis**: Underlying Price (NIFTY)
+   - **Y-axis**: PnL (₹)
+   - **Detail**: Standard "hockey-stick" payoff diagram for multi-leg strategies.
+2. **PnL Sensitivity Heatmap (Spot × Vol)**
+   - **X-axis**: Change in Spot (%)
+   - **Y-axis**: Change in Volatility (%)
+   - **Z-axis (Color)**: Estimated PnL (₹)
+   - **Detail**: Interactive grid showing how a strategy performs in different market scenarios.
+
+---
+
+## Page 5: Strategy Screener
+**Total Components: 1 Ranked List, 1 Detail View**
+
+### UI Objects
+- **Strategy Table**: List of multi-leg strategies (Spreads, Condors, Butterflies) ranked by Expected Value.
+- **Mini-Payoff Sparklines**: Small payoff charts embedded in each table row.
+- **AI Analyst (Gemma)**: Natural language reasoning panel explaining strategy selection.
+
+---
+
+## Page 6: Portfolio & Backtest
+**Total Components: 4 Charts, 5 Metric Cards**
+
+### Metric Cards (Backtest)
+- **Sharpe/Sortino**: Risk-adjusted return metrics.
+- **Max Drawdown**: Worst peak-to-trough loss (%).
+- **Win Rate**: Percentage of profitable periods.
+- **CAGR**: Compound Annual Growth Rate.
+
+### Charts
+1. **Equity Curve**
+   - **X-axis**: Time / Periods
+   - **Y-axis**: Cumulative Return (%)
+2. **Drawdown Chart**
+   - **X-axis**: Time
+   - **Y-axis**: Drawdown (%)
+3. **PnL Distribution (Portfolio KDE)**
+   - **X-axis**: PnL (₹)
+   - **Y-axis**: Probability Density
+4. **Strategy vs Benchmark Comparison**
+   - **X-axis**: Time
+   - **Y-axis**: Relative Performance
+
+---
+
+## Page 7: Regime Machine Learning (ML)
+**Total Components: 3 Charts, 1 Metrics Panel**
+
+### Charts
+1. **Regime Cluster 3D Scatter**
+   - **X-axis**: Variable 1 (e.g., RV20)
+   - **Y-axis**: Variable 2 (e.g., ATM IV)
+   - **Z-axis**: Variable 3 (e.g., GEX)
+   - **Detail**: Interactive 3D plot showing historical data points colored by detected market regime (K-Means/GMM clustering).
+2. **Feature Importance / Correlation Heatmap**
+   - **X-axis**: Features
+   - **Y-axis**: Features
+   - **Detail**: Statistical correlation between vol metrics and price returns.
+3. **Regime Transition Confusion Matrix**
+   - **X-axis**: Predicted Regime
+   - **Y-axis**: Actual (Rule-based) Regime
+   - **Detail**: Heatmap showing the accuracy of the ML model in classifying market states.
+
+---
+*Generated by Antigravity AI - Dashboard Inventory v1.1*

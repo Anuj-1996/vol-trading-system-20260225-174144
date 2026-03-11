@@ -37,6 +37,7 @@ class StaticPipelinePayload(BaseModel):
     max_width: float = Field(default=1000.0, gt=0.0)
     simulation_paths: int = Field(default=30000, ge=1000)
     simulation_steps: int = Field(default=64, ge=8)
+    model_selection: str = Field(default="SABR", description="Default surface comparison model: Heston or SABR")
 
 
 class DynamicPipelinePayload(StaticPipelinePayload):
@@ -69,6 +70,7 @@ class LiveStaticPipelinePayload(BaseModel):
     max_width: float = Field(default=1000.0, gt=0.0)
     simulation_paths: int = Field(default=30000, ge=1000)
     simulation_steps: int = Field(default=64, ge=8)
+    model_selection: str = Field(default="SABR", description="Default surface comparison model: Heston or SABR")
 
 
 class AIChatPayload(BaseModel):
@@ -133,6 +135,7 @@ class RecalibratePayload(BaseModel):
     max_width: float = Field(default=1000.0, gt=0.0)
     simulation_paths: int = Field(default=5000, ge=500)
     simulation_steps: int = Field(default=32, ge=8)
+    model_selection: str = Field(default="SABR", description="Default surface comparison model after recalibration")
 
 
 router = APIRouter()
@@ -426,6 +429,7 @@ def ai_recalibrate(payload: RecalibratePayload) -> dict:
             data_id=payload.data_id,
             initial_guess=payload.initial_guess,
             param_bounds=payload.param_bounds,
+            model_selection=payload.model_selection,
             risk_free_rate=payload.risk_free_rate,
             dividend_yield=payload.dividend_yield,
             capital_limit=payload.capital_limit,

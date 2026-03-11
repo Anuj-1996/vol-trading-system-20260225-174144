@@ -11,6 +11,7 @@ import pandas as pd
 
 from ..calibration.joint_calibrator import JointHestonCalibrator
 from ..calibration.heston_fft import HestonFFTPricer
+from ..calibration.sabr import SABRSurfaceCalibrator
 from ..config import CONFIG
 from ..data.ingestion import OptionChainIngestionService
 from ..data.models import OptionChainRawRecord
@@ -45,6 +46,7 @@ class PipelineRequest:
     max_width: float
     simulation_paths: int
     simulation_steps: int
+    model_selection: str = "SABR"
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,7 @@ class LivePipelineRequest:
     max_width: float = 1000
     simulation_paths: int = 5000
     simulation_steps: int = 32
+    model_selection: str = "SABR"
 
 
 # In-memory cache for fetched NSE data (data_id -> FetchResult + cleaned records)
@@ -88,6 +91,7 @@ class StrategyEngineService:
         self._surface_builder = SurfaceBuilder()
         self._liquidity_filter = LiquidityFilterEngine()
         self._calibrator = JointHestonCalibrator()
+        self._sabr = SABRSurfaceCalibrator()
         self._pricer = HestonFFTPricer()
         self._monte_carlo = HestonMonteCarloEngine()
         self._strategy_factory = StrategyFactory()
@@ -310,6 +314,14 @@ class StrategyEngineService:
             market_iv_matrix=surface.implied_vol_matrix,
         )
         residual_iv_matrix = model_iv_matrix - surface.implied_vol_matrix
+        surface_model_variants = self._build_surface_model_variants(
+            surface=surface,
+            spot=spot,
+            rate=request.risk_free_rate,
+            dividend_yield=request.dividend_yield,
+            heston_calibration_result=calibration_result,
+        )
+        requested_surface_model = request.model_selection if request.model_selection in surface_model_variants else "Heston"
         oi_profile = self._build_open_interest_profile(
             filtered_records=filtered,
             expiry_list=surface.expiry_list,
@@ -388,16 +400,14 @@ class StrategyEngineService:
                 **market_price_matrices,
                 "model_iv_matrix": model_iv_matrix.tolist(),
                 "residual_iv_matrix": residual_iv_matrix.tolist(),
+                "active_model": requested_surface_model,
+                "available_models": list(surface_model_variants.keys()),
+                "model_variants": surface_model_variants,
                 "expiry_labels": oi_profile["expiry_labels"],
                 "open_interest_matrix": oi_profile["open_interest_matrix"],
                 "max_pain_by_expiry": oi_profile["max_pain_by_expiry"],
             },
-            "calibration": {
-                "parameters": asdict(calibration_result.parameters),
-                "weighted_rmse": calibration_result.metrics.weighted_rmse,
-                "iterations": calibration_result.iterations,
-                "converged": calibration_result.converged,
-            },
+            "calibration": self._serialize_heston_calibration(calibration_result),
             "regime": {
                 "label": regime.label,
                 "confidence": regime.confidence,
@@ -1575,6 +1585,91 @@ class StrategyEngineService:
         )
         return model_matrix
 
+    @staticmethod
+    def _serialize_heston_calibration(calibration_result: Any) -> Dict[str, Any]:
+        return {
+            "model": "Heston",
+            "parameters": asdict(calibration_result.parameters),
+            "weighted_rmse": calibration_result.metrics.weighted_rmse,
+            "iterations": calibration_result.iterations,
+            "converged": calibration_result.converged,
+        }
+
+    @staticmethod
+    def _serialize_sabr_calibration(calibration_result: Any) -> Dict[str, Any]:
+        return {
+            "model": "SABR",
+            "parameters": {
+                "alpha": float(calibration_result.parameters.alpha),
+                "beta": float(calibration_result.parameters.beta),
+                "rho": float(calibration_result.parameters.rho),
+                "nu": float(calibration_result.parameters.nu),
+            },
+            "weighted_rmse": float(calibration_result.weighted_rmse),
+            "iterations": int(calibration_result.iterations),
+            "converged": bool(calibration_result.converged),
+            "expiry_fits": [
+                {
+                    "expiry_label": fit.expiry_label,
+                    "maturity": float(fit.maturity),
+                    "parameters": {
+                        "alpha": float(fit.parameters.alpha),
+                        "beta": float(fit.parameters.beta),
+                        "rho": float(fit.parameters.rho),
+                        "nu": float(fit.parameters.nu),
+                    },
+                    "rmse": float(fit.rmse),
+                    "iterations": int(fit.iterations),
+                    "converged": bool(fit.converged),
+                    "point_count": int(fit.point_count),
+                }
+                for fit in calibration_result.expiry_fits
+            ],
+        }
+
+    def _build_surface_model_variants(
+        self,
+        surface: Any,
+        spot: float,
+        rate: float,
+        dividend_yield: float,
+        heston_calibration_result: Any,
+    ) -> Dict[str, Dict[str, Any]]:
+        heston_matrix_raw = self._build_model_surface_matrix(
+            spot=spot,
+            rate=rate,
+            dividend_yield=dividend_yield,
+            maturity_grid=surface.maturity_grid,
+            strike_grid=surface.strike_grid,
+            params=heston_calibration_result.parameters,
+        )
+        heston_matrix = self._sanitize_model_surface_matrix(
+            model_iv_matrix=heston_matrix_raw,
+            market_iv_matrix=surface.implied_vol_matrix,
+        )
+        sabr_result = self._sabr.calibrate_surface(
+            market_surface=surface,
+            spot=spot,
+            rate=rate,
+            dividend_yield=dividend_yield,
+        )
+        sabr_matrix = self._sanitize_model_surface_matrix(
+            model_iv_matrix=sabr_result.model_iv_matrix,
+            market_iv_matrix=surface.implied_vol_matrix,
+        )
+        return {
+            "Heston": {
+                "model_iv_matrix": heston_matrix.tolist(),
+                "residual_iv_matrix": (heston_matrix - surface.implied_vol_matrix).tolist(),
+                "calibration": self._serialize_heston_calibration(heston_calibration_result),
+            },
+            "SABR": {
+                "model_iv_matrix": sabr_matrix.tolist(),
+                "residual_iv_matrix": (sabr_matrix - surface.implied_vol_matrix).tolist(),
+                "calibration": self._serialize_sabr_calibration(sabr_result),
+            },
+        }
+
     def _build_open_interest_profile(
         self,
         filtered_records: List[Any],
@@ -1721,6 +1816,14 @@ class StrategyEngineService:
             market_iv_matrix=surface.implied_vol_matrix,
         )
         residual_iv_matrix = model_iv_matrix - surface.implied_vol_matrix
+        surface_model_variants = self._build_surface_model_variants(
+            surface=surface,
+            spot=request.spot,
+            rate=request.risk_free_rate,
+            dividend_yield=request.dividend_yield,
+            heston_calibration_result=calibration_result,
+        )
+        requested_surface_model = request.model_selection if request.model_selection in surface_model_variants else "Heston"
         oi_profile = self._build_open_interest_profile(
             filtered_records=filtered,
             expiry_list=surface.expiry_list,
@@ -1806,16 +1909,14 @@ class StrategyEngineService:
                 **market_price_matrices,
                 "model_iv_matrix": model_iv_matrix.tolist(),
                 "residual_iv_matrix": residual_iv_matrix.tolist(),
+                "active_model": requested_surface_model,
+                "available_models": list(surface_model_variants.keys()),
+                "model_variants": surface_model_variants,
                 "expiry_labels": oi_profile["expiry_labels"],
                 "open_interest_matrix": oi_profile["open_interest_matrix"],
                 "max_pain_by_expiry": oi_profile["max_pain_by_expiry"],
             },
-            "calibration": {
-                "parameters": asdict(calibration_result.parameters),
-                "weighted_rmse": calibration_result.metrics.weighted_rmse,
-                "iterations": calibration_result.iterations,
-                "converged": calibration_result.converged,
-            },
+            "calibration": self._serialize_heston_calibration(calibration_result),
             "regime": {
                 "label": regime.label,
                 "confidence": regime.confidence,
@@ -1832,6 +1933,7 @@ class StrategyEngineService:
         data_id: Optional[str] = None,
         initial_guess: Optional[Dict[str, float]] = None,
         param_bounds: Optional[Dict[str, list]] = None,
+        model_selection: str = "SABR",
         risk_free_rate: float = 0.065,
         dividend_yield: float = 0.012,
         capital_limit: float = 500000,
@@ -1956,6 +2058,14 @@ class StrategyEngineService:
             market_iv_matrix=surface.implied_vol_matrix,
         )
         residual_iv_matrix = model_iv_matrix - surface.implied_vol_matrix
+        surface_model_variants = self._build_surface_model_variants(
+            surface=surface,
+            spot=spot,
+            rate=risk_free_rate,
+            dividend_yield=dividend_yield,
+            heston_calibration_result=calibration_result,
+        )
+        requested_surface_model = model_selection if model_selection in surface_model_variants else "Heston"
         oi_profile = self._build_open_interest_profile(
             filtered_records=filtered,
             expiry_list=surface.expiry_list,
@@ -2029,16 +2139,14 @@ class StrategyEngineService:
                 **market_price_matrices,
                 "model_iv_matrix": model_iv_matrix.tolist(),
                 "residual_iv_matrix": residual_iv_matrix.tolist(),
+                "active_model": requested_surface_model,
+                "available_models": list(surface_model_variants.keys()),
+                "model_variants": surface_model_variants,
                 "expiry_labels": oi_profile["expiry_labels"],
                 "open_interest_matrix": oi_profile["open_interest_matrix"],
                 "max_pain_by_expiry": oi_profile["max_pain_by_expiry"],
             },
-            "calibration": {
-                "parameters": asdict(calibration_result.parameters),
-                "weighted_rmse": calibration_result.metrics.weighted_rmse,
-                "iterations": calibration_result.iterations,
-                "converged": calibration_result.converged,
-            },
+            "calibration": self._serialize_heston_calibration(calibration_result),
             "regime": {
                 "label": regime.label,
                 "confidence": regime.confidence,

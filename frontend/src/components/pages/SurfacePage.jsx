@@ -263,6 +263,7 @@ export default function SurfacePage({
   activeSnapshotId,
   market,
   surface,
+  modelSelection = 'SABR',
   selectedExpiryIndex = 0,
   onExpiryIndexChange,
   onRecalibrate,
@@ -271,6 +272,7 @@ export default function SurfacePage({
   const [sliceExpiryIndex, setSliceExpiryIndex] = useState(0);
   const [sliceStrikeIndex, setSliceStrikeIndex] = useState(0);
   const [logMoneyness, setLogMoneyness] = useState(false);
+  const [selectedSurfaceModel, setSelectedSurfaceModel] = useState(modelSelection || 'SABR');
   const [recalibrating, setRecalibrating] = useState(false);
   const [recalibrateMsg, setRecalibrateMsg] = useState('');
 
@@ -297,13 +299,52 @@ export default function SurfacePage({
   const openInterestMatrix = Array.isArray(surface?.open_interest_matrix) ? surface.open_interest_matrix : [];
   const maxPainByExpiry = Array.isArray(surface?.max_pain_by_expiry) ? surface.max_pain_by_expiry : [];
   const marketMatrix = Array.isArray(surface?.market_iv_matrix) ? surface.market_iv_matrix : [];
-  const modelMatrix = Array.isArray(surface?.model_iv_matrix) ? surface.model_iv_matrix : [];
+  const modelVariants = useMemo(() => {
+    const variants = {};
+    if (Array.isArray(surface?.model_iv_matrix)) {
+      variants.Heston = {
+        model_iv_matrix: surface.model_iv_matrix,
+        residual_iv_matrix: surface?.residual_iv_matrix,
+        calibration: surface?.calibration ? { ...surface.calibration, model: 'Heston' } : null,
+      };
+    }
+    const backendVariants = surface?.model_variants && typeof surface.model_variants === 'object'
+      ? surface.model_variants
+      : {};
+    Object.entries(backendVariants).forEach(([modelName, payload]) => {
+      if (!payload || !Array.isArray(payload.model_iv_matrix)) {
+        return;
+      }
+      variants[modelName] = {
+        ...payload,
+        calibration: payload.calibration || null,
+      };
+    });
+    return variants;
+  }, [surface]);
+  const availableSurfaceModels = useMemo(() => Object.keys(modelVariants), [modelVariants]);
+  const selectedModelVariant = modelVariants[selectedSurfaceModel]
+    || modelVariants[modelSelection]
+    || modelVariants[surface?.active_model]
+    || modelVariants.Heston
+    || null;
+  const activeCalibration = selectedModelVariant?.calibration || surface?.calibration || null;
+  const activeModelName = selectedModelVariant?.calibration?.model || selectedSurfaceModel || 'Heston';
+  const modelMatrix = Array.isArray(selectedModelVariant?.model_iv_matrix)
+    ? selectedModelVariant.model_iv_matrix
+    : Array.isArray(surface?.model_iv_matrix)
+      ? surface.model_iv_matrix
+      : [];
   const smoothedModelMatrix = useMemo(() => smoothMatrix2D(modelMatrix), [modelMatrix]);
   const denseModelSurface = useMemo(
     () => densifyMatrix(strikeGrid, maturityGrid, smoothedModelMatrix, 7, 7),
     [strikeGrid, maturityGrid, smoothedModelMatrix],
   );
-  const residualMatrix = Array.isArray(surface?.residual_iv_matrix) ? surface.residual_iv_matrix : [];
+  const residualMatrix = Array.isArray(selectedModelVariant?.residual_iv_matrix)
+    ? selectedModelVariant.residual_iv_matrix
+    : Array.isArray(surface?.residual_iv_matrix)
+      ? surface.residual_iv_matrix
+      : [];
   const displayResidualMatrix = useMemo(() => {
     if (!marketMatrix.length || !smoothedModelMatrix.length) {
       return residualMatrix;
@@ -441,7 +482,64 @@ export default function SurfacePage({
     };
   }, [maturityGrid, strikeGrid, smoothedModelMatrix, sliceExpiryIndex]);
   const calibrationDiagnostics = useMemo(() => {
-    const calib = surface?.calibration || null;
+    const calib = activeCalibration || null;
+    const model = calib?.model || activeModelName || 'Heston';
+    if (model === 'SABR') {
+      const params = calib?.parameters || {};
+      const alpha = Number(params?.alpha);
+      const beta = Number(params?.beta);
+      const rho = Number(params?.rho);
+      const nu = Number(params?.nu);
+      const rmse = Number(calib?.weighted_rmse);
+      const expiryFits = Array.isArray(calib?.expiry_fits) ? calib.expiry_fits : [];
+      const convergedCount = expiryFits.filter((fit) => fit?.converged).length;
+      const totalFits = expiryFits.length;
+      const averageFitRmse = totalFits
+        ? expiryFits.reduce((acc, fit) => acc + Number(fit?.rmse ?? 0), 0) / totalFits
+        : null;
+      const bestFit = expiryFits.length
+        ? [...expiryFits].sort((left, right) => Number(left?.rmse ?? Infinity) - Number(right?.rmse ?? Infinity))[0]
+        : null;
+      const worstFit = expiryFits.length
+        ? [...expiryFits].sort((left, right) => Number(right?.rmse ?? -Infinity) - Number(left?.rmse ?? -Infinity))[0]
+        : null;
+
+      const checks = {
+        alpha: Number.isFinite(alpha) && alpha > 0,
+        beta: Number.isFinite(beta) && beta >= 0 && beta <= 1,
+        rho: Number.isFinite(rho) && Math.abs(rho) < 0.999,
+        nu: Number.isFinite(nu) && nu > 0 && nu <= 5,
+        rmse: Number.isFinite(rmse) && rmse <= 0.08,
+        coverage: totalFits > 0 && convergedCount / totalFits >= 0.6,
+        expiries: totalFits >= 2,
+        converged: Boolean(calib?.converged),
+      };
+      const passCount = Object.values(checks).filter(Boolean).length;
+      const totalCount = Object.keys(checks).length;
+      const score = totalCount ? passCount / totalCount : 0;
+      const verdict = score >= 0.8 ? 'Good' : score >= 0.55 ? 'Usable' : 'Unstable';
+      return {
+        model,
+        params: {
+          alpha: Number.isFinite(alpha) ? alpha : null,
+          beta: Number.isFinite(beta) ? beta : null,
+          rho: Number.isFinite(rho) ? rho : null,
+          nu: Number.isFinite(nu) ? nu : null,
+        },
+        rmse: Number.isFinite(rmse) ? rmse : null,
+        checks,
+        passCount,
+        totalCount,
+        verdict,
+        expiryFits,
+        convergedCount,
+        expiryCount: totalFits,
+        averageFitRmse: Number.isFinite(averageFitRmse) ? averageFitRmse : null,
+        bestFitExpiry: bestFit?.expiry_label || null,
+        worstFitExpiry: worstFit?.expiry_label || null,
+      };
+    }
+
     const params = calib?.parameters || {};
     const v0 = Number(params?.v0);
     const theta = Number(params?.theta);
@@ -494,6 +592,7 @@ export default function SurfacePage({
     const verdict = score >= 0.8 ? 'Good' : score >= 0.55 ? 'Usable' : 'Unstable';
 
     return {
+      model,
       params: {
         v0: toFinite(v0),
         theta: toFinite(theta),
@@ -514,26 +613,78 @@ export default function SurfacePage({
       verdict,
       crisis,
     };
-  }, [surface, market]);
+  }, [activeCalibration, activeModelName, market]);
+  const calibrationCards = useMemo(() => {
+    if (calibrationDiagnostics.model === 'SABR') {
+      return [
+        { label: 'Model', value: 'SABR' },
+        { label: 'Status', value: activeCalibration?.converged ? 'Converged' : 'Partial', color: activeCalibration?.converged ? '#22c55e' : '#f59e0b' },
+        { label: 'Iterations', value: activeCalibration?.iterations ?? '-' },
+        { label: 'Weighted RMSE', value: formatNumber(calibrationDiagnostics.rmse, 6) },
+        { label: 'Calibration Verdict', value: `${calibrationDiagnostics.verdict} (${calibrationDiagnostics.passCount}/${calibrationDiagnostics.totalCount})`, color: calibrationDiagnostics.verdict === 'Good' ? '#22c55e' : calibrationDiagnostics.verdict === 'Usable' ? '#f59e0b' : '#ef4444' },
+        { label: 'Converged Expiry Fits', value: `${calibrationDiagnostics.convergedCount}/${calibrationDiagnostics.expiryCount || 0}` },
+        { label: 'alpha', value: formatNumber(calibrationDiagnostics.params.alpha, 6) },
+        { label: 'beta', value: formatNumber(calibrationDiagnostics.params.beta, 4) },
+        { label: 'rho', value: formatNumber(calibrationDiagnostics.params.rho, 4) },
+        { label: 'nu (Vol of Vol)', value: formatNumber(calibrationDiagnostics.params.nu, 6) },
+        { label: 'Average Slice RMSE', value: formatNumber(calibrationDiagnostics.averageFitRmse, 6) },
+        { label: 'Best Fit Expiry', value: calibrationDiagnostics.bestFitExpiry || '-' },
+        { label: 'Worst Fit Expiry', value: calibrationDiagnostics.worstFitExpiry || '-' },
+      ];
+    }
+
+    return [
+      { label: 'Model', value: 'Heston' },
+      { label: 'Status', value: activeCalibration?.converged ? 'Converged' : 'Not Converged', color: activeCalibration?.converged ? '#22c55e' : '#f43f5e' },
+      { label: 'Iterations', value: activeCalibration?.iterations ?? '-' },
+      { label: 'Weighted RMSE', value: formatNumber(calibrationDiagnostics.rmse, 6) },
+      { label: 'Calibration Verdict', value: `${calibrationDiagnostics.verdict} (${calibrationDiagnostics.passCount}/${calibrationDiagnostics.totalCount})`, color: calibrationDiagnostics.verdict === 'Good' ? '#22c55e' : calibrationDiagnostics.verdict === 'Usable' ? '#f59e0b' : '#ef4444' },
+      { label: 'v0 (Initial Variance)', value: formatNumber(calibrationDiagnostics.params.v0, 6) },
+      { label: 'theta (Long-Run Variance)', value: formatNumber(calibrationDiagnostics.params.theta, 6) },
+      { label: 'kappa (Mean Reversion)', value: formatNumber(calibrationDiagnostics.params.kappa, 4) },
+      { label: 'sigma / xi (Vol of Vol)', value: formatNumber(calibrationDiagnostics.params.xi, 6) },
+      { label: 'rho (Correlation)', value: formatNumber(calibrationDiagnostics.params.rho, 4) },
+      { label: 'Regime Bounds', value: calibrationDiagnostics.crisis ? 'Crisis' : 'Normal' },
+      { label: 'Sqrt(v0) Instant Vol', value: calibrationDiagnostics.instVol != null ? `${(calibrationDiagnostics.instVol * 100).toFixed(2)}%` : '-' },
+      { label: 'Sqrt(theta) Long Vol', value: calibrationDiagnostics.longVol != null ? `${(calibrationDiagnostics.longVol * 100).toFixed(2)}%` : '-' },
+      { label: 'Half-Life', value: calibrationDiagnostics.halfLifeDays != null ? `${formatNumber(calibrationDiagnostics.halfLifeDays, 1)} days` : '-' },
+      { label: 'Feller Condition', value: calibrationDiagnostics.fellerOk ? 'Pass' : 'Fail', color: calibrationDiagnostics.fellerOk ? '#22c55e' : '#ef4444' },
+      { label: '2*kappa*theta', value: formatNumber(calibrationDiagnostics.fellerLhs, 6) },
+      { label: 'xi^2', value: formatNumber(calibrationDiagnostics.fellerRhs, 6) },
+    ];
+  }, [activeCalibration, calibrationDiagnostics]);
 
   useEffect(() => {
     setSliceExpiryIndex(selectedExpiryIndex);
   }, [selectedExpiryIndex]);
 
+  useEffect(() => {
+    const preferredModel = surface?.active_model || modelSelection || 'SABR';
+    setSelectedSurfaceModel((current) => {
+      if (availableSurfaceModels.includes(current)) {
+        return current;
+      }
+      if (availableSurfaceModels.includes(preferredModel)) {
+        return preferredModel;
+      }
+      return availableSurfaceModels[0] || preferredModel;
+    });
+  }, [surface?.active_model, modelSelection, availableSurfaceModels]);
+
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
       <div className="page-surface-grid">
         <div className="surface-hero">
-          <Panel title="Market + Model Combined Surface 3D" enableCopyPlot>
+          <Panel title={`Market + ${activeModelName} Combined Surface 3D`} enableCopyPlot>
             <Plot
               data={singleExpiry
                 ? [
                     { type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: marketMatrix[0] || [], line: { color: '#22c55e', width: 2 }, name: 'Market Smile' },
-                    { type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: smoothedModelMatrix[0] || [], line: { color: '#f59e0b', width: 2, shape: 'spline', smoothing: 1.1 }, name: 'Model Smile' },
+                    { type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: smoothedModelMatrix[0] || [], line: { color: '#f59e0b', width: 2, shape: 'spline', smoothing: 1.1 }, name: `${activeModelName} Smile` },
                   ]
                 : [
                     { type: 'surface', x: strikeGrid, y: maturityGrid, z: marketMatrix, colorscale: 'Viridis', opacity: 0.92, showscale: false, name: 'Market', text: marketExpiryText, hovertemplate: 'Strike: %{x:.0f}<br>Expiry: %{text}<br>IV: %{z:.4f}<extra>Market</extra>' },
-                    { type: 'surface', x: denseModelSurface.strikeDense, y: denseModelSurface.maturityDense, z: denseModelSurface.matrixDense, colorscale: 'Portland', opacity: 0.72, showscale: true, name: 'Model', hovertemplate: 'Strike: %{x:.0f}<br>IV: %{z:.4f}<extra>Model</extra>' },
+                    { type: 'surface', x: denseModelSurface.strikeDense, y: denseModelSurface.maturityDense, z: denseModelSurface.matrixDense, colorscale: 'Portland', opacity: 0.72, showscale: true, name: activeModelName, hovertemplate: `Strike: %{x:.0f}<br>IV: %{z:.4f}<extra>${activeModelName}</extra>` },
                   ]}
               layout={{
                 height: 360,
@@ -582,10 +733,10 @@ export default function SurfacePage({
           />
         </Panel>
 
-        <Panel title="Model IV Surface 3D" enableCopyPlot>
+        <Panel title={`${activeModelName} IV Surface 3D`} enableCopyPlot>
           <Plot
             data={singleExpiry
-              ? [{ type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: smoothedModelMatrix[0] || [], line: { color: '#f59e0b', width: 2, shape: 'spline', smoothing: 1.1 }, name: 'Model Smile' }]
+              ? [{ type: 'scatter', mode: 'lines+markers', x: strikeGrid, y: smoothedModelMatrix[0] || [], line: { color: '#f59e0b', width: 2, shape: 'spline', smoothing: 1.1 }, name: `${activeModelName} Smile` }]
               : [{
                   type: 'surface',
                   x: denseModelSurface.strikeDense,
@@ -596,7 +747,7 @@ export default function SurfacePage({
                   contours: {
                     z: { show: false },
                   },
-                  hovertemplate: 'Strike: %{x:.0f}<br>IV: %{z:.4f}<extra>Model</extra>',
+                  hovertemplate: `Strike: %{x:.0f}<br>IV: %{z:.4f}<extra>${activeModelName}</extra>`,
                 }]}
             layout={{
               height: 260,
@@ -819,7 +970,7 @@ export default function SurfacePage({
             <div><span>Dominant Strike Freq</span><strong>{`${formatNumber(frequencyDomain.dominantStrikeFreq, 4)} cyc/step`}</strong></div>
             <div><span>Dominant Maturity Freq</span><strong>{`${formatNumber(frequencyDomain.dominantMaturityFreq, 4)} cyc/step`}</strong></div>
             <div><span>Dominant Spectral Power</span><strong>{formatNumber(frequencyDomain.dominantPower, 6)}</strong></div>
-            <div><span>Transform Basis</span><strong>2D DFT (Model IV)</strong></div>
+            <div><span>Transform Basis</span><strong>{`2D DFT (${activeModelName} IV)`}</strong></div>
             <div><span>Dominant Strike Cycle</span><strong>{frequencyDomain.dominantStrikeCyclePoints > 0 ? `${formatNumber(frequencyDomain.dominantStrikeCyclePoints, 1)} pts` : '-'}</strong></div>
             <div><span>Dominant Maturity Cycle</span><strong>{frequencyDomain.dominantMaturityCycleDays > 0 ? `${formatNumber(frequencyDomain.dominantMaturityCycleDays, 1)} days` : '-'}</strong></div>
             <div><span>Strike Step (Grid)</span><strong>{frequencyDomain.strikeStepPoints > 0 ? `${formatNumber(frequencyDomain.strikeStepPoints, 1)} pts` : '-'}</strong></div>
@@ -829,37 +980,46 @@ export default function SurfacePage({
             Frequency units are cycles per grid step. Cycle metrics convert those frequencies to approximate strike points and days.
           </div>
         </Panel>
-        <Panel title="Heston Calibration">
-          {surface?.calibration ? (
+        <Panel title={`${activeModelName} Calibration Summary`} className="surface-calibration-wide">
+          {activeCalibration ? (
             <>
-              <div className="kv-grid two-col compact">
-                <div><span>Status</span><strong style={{color: surface.calibration.converged ? '#22c55e' : '#f43f5e'}}>{surface.calibration.converged ? 'Converged' : 'Not Converged'}</strong></div>
-                <div><span>Iterations</span><strong>{surface.calibration.iterations ?? '-'}</strong></div>
-                <div><span>Weighted RMSE</span><strong>{formatNumber(calibrationDiagnostics.rmse, 6)}</strong></div>
-                <div><span>Calibration Verdict</span><strong style={{color: calibrationDiagnostics.verdict === 'Good' ? '#22c55e' : calibrationDiagnostics.verdict === 'Usable' ? '#f59e0b' : '#ef4444'}}>{calibrationDiagnostics.verdict} ({calibrationDiagnostics.passCount}/{calibrationDiagnostics.totalCount})</strong></div>
-                <div><span>v0 (Initial Variance)</span><strong>{formatNumber(calibrationDiagnostics.params.v0, 6)}</strong></div>
-                <div><span>theta (Long-Run Variance)</span><strong>{formatNumber(calibrationDiagnostics.params.theta, 6)}</strong></div>
-                <div><span>kappa (Mean Reversion)</span><strong>{formatNumber(calibrationDiagnostics.params.kappa, 4)}</strong></div>
-                <div><span>sigma / xi (Vol of Vol)</span><strong>{formatNumber(calibrationDiagnostics.params.xi, 6)}</strong></div>
-                <div><span>rho (Correlation)</span><strong>{formatNumber(calibrationDiagnostics.params.rho, 4)}</strong></div>
-                <div><span>Regime Bounds</span><strong>{calibrationDiagnostics.crisis ? 'Crisis' : 'Normal'}</strong></div>
+              <div className="surface-model-toolbar">
+                <label>
+                  Surface model
+                  <select value={selectedSurfaceModel} onChange={(event) => setSelectedSurfaceModel(event.target.value)}>
+                    {availableSurfaceModels.map((modelName) => (
+                      <option key={modelName} value={modelName}>{modelName}</option>
+                    ))}
+                  </select>
+                </label>
+                <span>
+                  Heston remains the production pricing engine. SABR is wired for surface-fit comparison across the 3D views.
+                </span>
               </div>
-              <div className="kv-grid two-col compact" style={{ marginTop: 8 }}>
-                <div><span>Sqrt(v0) Instant Vol</span><strong>{calibrationDiagnostics.instVol != null ? `${(calibrationDiagnostics.instVol * 100).toFixed(2)}%` : '-'}</strong></div>
-                <div><span>Sqrt(theta) Long Vol</span><strong>{calibrationDiagnostics.longVol != null ? `${(calibrationDiagnostics.longVol * 100).toFixed(2)}%` : '-'}</strong></div>
-                <div><span>Half-Life</span><strong>{calibrationDiagnostics.halfLifeDays != null ? `${formatNumber(calibrationDiagnostics.halfLifeDays, 1)} days` : '-'}</strong></div>
-                <div><span>Feller Condition</span><strong style={{ color: calibrationDiagnostics.fellerOk ? '#22c55e' : '#ef4444' }}>{calibrationDiagnostics.fellerOk ? 'Pass' : 'Fail'}</strong></div>
-                <div><span>2*kappa*theta</span><strong>{formatNumber(calibrationDiagnostics.fellerLhs, 6)}</strong></div>
-                <div><span>xi^2</span><strong>{formatNumber(calibrationDiagnostics.fellerRhs, 6)}</strong></div>
+              <div className="calibration-summary-grid compact">
+                {calibrationCards.map((item) => (
+                  <div key={`${activeModelName}-${item.label}`}>
+                    <span>{item.label}</span>
+                    <strong style={item.color ? { color: item.color } : undefined}>{item.value}</strong>
+                  </div>
+                ))}
               </div>
               <div style={{ marginTop: 6, color: '#94a3b8', fontSize: '0.68rem' }}>
-                Quality checks: parameter bounds, Feller condition, half-life (5 to 756 days), RMSE threshold, and convergence.
+                {calibrationDiagnostics.model === 'SABR'
+                  ? 'SABR checks: parameter sanity, slice-fit RMSE, expiry coverage, and fit convergence across expiries.'
+                  : 'Heston checks: parameter bounds, Feller condition, half-life (5 to 756 days), RMSE threshold, and convergence.'}
               </div>
-              <div style={{ marginTop: 6, color: '#6b7280', fontSize: '0.64rem', lineHeight: 1.35 }}>
-                Normal bounds: v0 [0.005, 0.05], theta [0.01, 0.08], kappa [0.3, 4.0], sigma/xi [0.2, 1.2], rho [-0.9, -0.2].<br />
-                Crisis bounds (ATM IV &gt; 35%): v0 [0.005, 0.15], theta [0.005, 0.20], kappa [0.2, 8.0], sigma/xi [0.1, 2.0], rho [-0.99, -0.05].
-              </div>
-              {calibrationDiagnostics.verdict === 'Unstable' ? (
+              {calibrationDiagnostics.model === 'Heston' ? (
+                <div style={{ marginTop: 6, color: '#6b7280', fontSize: '0.64rem', lineHeight: 1.35 }}>
+                  Normal bounds: v0 [0.005, 0.05], theta [0.01, 0.08], kappa [0.3, 4.0], sigma/xi [0.2, 1.2], rho [-0.9, -0.2].<br />
+                  Crisis bounds (ATM IV &gt; 35%): v0 [0.005, 0.15], theta [0.005, 0.20], kappa [0.2, 8.0], sigma/xi [0.1, 2.0], rho [-0.99, -0.05].
+                </div>
+              ) : (
+                <div style={{ marginTop: 6, color: '#6b7280', fontSize: '0.64rem', lineHeight: 1.35 }}>
+                  SABR is calibrated independently on each expiry slice using Hagan lognormal implied vols, then stitched into a 3D comparison surface.
+                </div>
+              )}
+              {calibrationDiagnostics.model === 'Heston' && calibrationDiagnostics.verdict === 'Unstable' ? (
                 <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <button
                     type="button"

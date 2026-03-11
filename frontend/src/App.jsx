@@ -55,7 +55,7 @@ export default function App() {
   const [underlying, setUnderlying] = useState('NIFTY');
   const [selectedExpiry, setSelectedExpiry] = useState('auto');
   const [recentLogs, setRecentLogs] = useState([]);
-  const [modelSelection, setModelSelection] = useState('Heston');
+  const [modelSelection, setModelSelection] = useState('SABR');
   const [confidenceLevel, setConfidenceLevel] = useState(99);
   const [scoreWeights, setScoreWeights] = useState('EV:0.30, VaR:0.25, ES:0.20, RoM:0.15, Fragility:0.10');
   const [liveMetadata, setLiveMetadata] = useState(null);
@@ -162,6 +162,7 @@ export default function App() {
         max_width: Number(form.max_width),
         simulation_paths: Number(form.simulation_paths),
         simulation_steps: Number(form.simulation_steps),
+        model_selection: modelSelection,
       };
 
       setFetchProgress(PROGRESS_STEPS[2]);
@@ -207,11 +208,14 @@ export default function App() {
         <label>
           Model selection dropdown
           <select value={modelSelection} onChange={(event) => setModelSelection(event.target.value)}>
-            <option value="Black Scholes">Black Scholes</option>
+            <option value="Black Scholes" disabled>Black Scholes (Not wired)</option>
             <option value="Heston">Heston</option>
             <option value="SABR">SABR</option>
           </select>
         </label>
+        <span style={{ fontSize: '11px', color: '#9ca3af', marginTop: 6, display: 'block', lineHeight: 1.4 }}>
+          This sets the default comparison model on the Vol Surface page. Heston remains the production pricing and simulation engine; SABR is available for surface-fit comparison.
+        </span>
       </Panel>
       <Panel title="Calibration Panel">
         <div className="filters-grid">
@@ -355,7 +359,7 @@ export default function App() {
     if (!liveMetadata?.data_id) {
       throw new Error('No live data_id available for recalibration. Run live fetch first.');
     }
-    const result = await aiRecalibrate(liveMetadata.data_id, null, null);
+    const result = await aiRecalibrate(liveMetadata.data_id, null, null, { model_selection: modelSelection });
     const recalData = result?.data || result;
     applyRecalibratedData(recalData);
     return recalData;
@@ -380,6 +384,7 @@ export default function App() {
           activeSnapshotId={activeSnapshotId}
           market={market}
           surface={surface}
+          modelSelection={modelSelection}
           selectedExpiryIndex={selectedExpiryIndex}
           onExpiryIndexChange={(nextIndex) => setSelectedExpiry(String(nextIndex))}
           onRecalibrate={handleQuickRecalibrate}

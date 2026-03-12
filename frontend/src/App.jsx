@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getKiteTokenInfo } from './api/token.js';
+import { isKiteTokenExpired } from './utils/kiteToken.js';
 import {
   getKiteLoginUrl,
   checkBackendHealth,
@@ -46,7 +48,6 @@ const INITIAL_FORM = {
 };
 
 const LIVE_SOURCE_OPTIONS = [
-  { value: 'NSE', label: 'NSE' },
   { value: 'ZERODHA', label: 'Live Feed' },
 ];
 
@@ -65,12 +66,29 @@ const NAV_ITEMS = [
 ];
 
 export default function App() {
+  const [kiteTokenInfo, setKiteTokenInfo] = useState({ token: '', updated_at: '' });
+  const [kiteTokenExpired, setKiteTokenExpired] = useState(true);
+  // Fetch Kite token info on mount and every 5 minutes
+  useEffect(() => {
+    async function fetchToken() {
+      try {
+        const info = await getKiteTokenInfo();
+        setKiteTokenInfo(info);
+        setKiteTokenExpired(isKiteTokenExpired(info.updated_at));
+      } catch {
+        setKiteTokenExpired(true);
+      }
+    }
+    fetchToken();
+    const interval = setInterval(fetchToken, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
   const [form, setForm] = useState(INITIAL_FORM);
   const [activePage, setActivePage] = useState('market');
   const [clockValue, setClockValue] = useState(new Date());
   const [backendStatus, setBackendStatus] = useState('unknown');
   const [underlying, setUnderlying] = useState('NIFTY');
-  const [liveSource, setLiveSource] = useState('NSE');
+  const [liveSource, setLiveSource] = useState('ZERODHA');
   const [selectedExpiry, setSelectedExpiry] = useState('auto');
   const [recentLogs, setRecentLogs] = useState([]);
   const [modelSelection, setModelSelection] = useState('SABR');
@@ -115,6 +133,16 @@ export default function App() {
     setDynamicState,
     setSelectedStrategyId,
   } = useSnapshotStore();
+
+  // Auto-dismiss error banner after 5 seconds
+  const errorTimerRef = useRef(null);
+  useEffect(() => {
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    if (error) {
+      errorTimerRef.current = setTimeout(() => clearError(), 5000);
+    }
+    return () => { if (errorTimerRef.current) clearTimeout(errorTimerRef.current); };
+  }, [error, clearError]);
 
   useEffect(() => {
     const timer = setInterval(() => setClockValue(new Date()), 1000);
@@ -172,7 +200,7 @@ export default function App() {
       setForm((prev) => ({ ...prev, spot: Number(nextLiveMetadata.spot) || prev.spot }));
       setLiveMetadata(nextLiveMetadata);
     }
-    aiSyncPipeline(updatedPayload).catch(() => {});
+    aiSyncPipeline(updatedPayload).catch(() => { });
   }, [setActiveSnapshotId, setSnapshotData]);
 
   const ensureBackend = async () => {
@@ -275,7 +303,7 @@ export default function App() {
         auto_refresh_enabled: Boolean(form.auto_refresh_enabled),
         ...pipelineParams,
         force: false,
-      }).catch(() => {});
+      }).catch(() => { });
       setFetchProgress('');
       await fetchLogsOnce();
     } catch (requestError) {
@@ -360,7 +388,7 @@ export default function App() {
       simulation_steps: Number(form.simulation_steps),
       model_selection: modelSelection,
       force: false,
-    }).catch(() => {});
+    }).catch(() => { });
   }, [
     form.auto_refresh_enabled,
     form.capital_limit,
@@ -800,15 +828,15 @@ export default function App() {
                 <span>Regime</span>
                 <strong style={{ color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e' }}>{regimeLabel}</strong>
               </div>
-              {liveSource === 'ZERODHA' ? (
+              {liveSource === 'ZERODHA' && kiteTokenExpired ? (
                 <button
                   type="button"
                   className="action-btn top-connect-btn"
                   onClick={connectZerodha}
                   disabled={loading}
-                  title="Open Zerodha login to refresh the Kite access token."
+                  title="Open login to refresh the Kite access token."
                 >
-                  Connect Zerodha
+                  Connect
                 </button>
               ) : null}
               <button type="button" className="action-btn accent top-fetch-btn" onClick={runLive} disabled={loading}>
@@ -849,7 +877,7 @@ export default function App() {
             </nav>
           </header>
 
-          {error ? <div className="error-box">{error}</div> : null}
+          {error ? <div className="error-box">{error}<button className="error-dismiss" onClick={clearError} title="Dismiss">×</button></div> : null}
 
           {loading && fetchProgress && (
             <div className="loading-overlay">

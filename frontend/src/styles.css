@@ -409,10 +409,12 @@ textarea {
   line-height: 1.2;
   transition: color 0.15s, border-color 0.15s, background-color 0.15s;
 }
+
 .copy-plot-btn:hover {
   color: #38bdf8;
   border-color: #38bdf8;
 }
+
 .copy-plot-btn.error {
   color: #f87171;
   border-color: #f87171;
@@ -429,6 +431,7 @@ textarea {
   line-height: 1;
   transition: color 0.15s, border-color 0.15s;
 }
+
 .bbg-panel-header .maximize-btn:hover {
   color: var(--panel-title-color);
   border-color: var(--panel-title-color);
@@ -472,6 +475,7 @@ textarea {
   flex-direction: column;
   overflow: hidden;
 }
+
 .panel-fullscreen-header {
   display: flex;
   align-items: center;
@@ -485,6 +489,7 @@ textarea {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
 .panel-fullscreen-header .close-btn {
   background: none;
   border: 1px solid #374151;
@@ -495,22 +500,27 @@ textarea {
   border-radius: 3px;
   transition: color 0.15s, border-color 0.15s;
 }
+
 .panel-fullscreen-header .close-btn:hover {
   color: #ef4444;
   border-color: #ef4444;
 }
+
 .panel-fullscreen-body {
   flex: 1;
   overflow: auto;
   padding: 8px;
 }
+
 .panel-fullscreen-panel {
   height: 100%;
 }
+
 .panel-fullscreen-panel .bbg-panel-body {
   height: 100%;
   overflow: auto;
 }
+
 .panel-fullscreen-panel .js-plotly-plot,
 .panel-fullscreen-panel .plot-container,
 .panel-fullscreen-panel .svg-container {
@@ -529,14 +539,17 @@ textarea {
 .panel-3d .bbg-panel-body {
   overflow: visible;
 }
+
 .panel-3d .bbg-panel-body .js-plotly-plot,
 .panel-3d .bbg-panel-body .plot-container {
   overflow: visible !important;
   touch-action: none;
 }
+
 .panel-fullscreen-panel.panel-3d .bbg-panel-body {
   overflow: visible;
 }
+
 .panel-fullscreen-panel.panel-3d .js-plotly-plot,
 .panel-fullscreen-panel.panel-3d .plot-container,
 .panel-fullscreen-panel.panel-3d .svg-container {
@@ -545,15 +558,15 @@ textarea {
   max-height: unset !important;
 }
 
-.page-market-grid > *,
-.page-surface-grid > *,
-.page-regime-grid > *,
-.page-screener-grid > *,
-.page-detail-grid > *,
-.page-risk-grid > *,
-.page-backtest-grid > *,
-.page-portfolio-grid > *,
-.page-settings-grid > * {
+.page-market-grid>*,
+.page-surface-grid>*,
+.page-regime-grid>*,
+.page-screener-grid>*,
+.page-detail-grid>*,
+.page-risk-grid>*,
+.page-backtest-grid>*,
+.page-portfolio-grid>*,
+.page-settings-grid>* {
   min-width: 0;
 }
 
@@ -1341,7 +1354,7 @@ textarea {
   gap: 6px;
 }
 
-.portfolio-kpi-stack > div {
+.portfolio-kpi-stack>div {
   border: 1px solid #1f2937;
   background: var(--card-bg);
   padding: 8px 9px;
@@ -1402,7 +1415,7 @@ textarea {
   padding: 2px;
 }
 
-.portfolio-greeks-raw > div {
+.portfolio-greeks-raw>div {
   border: 1px solid #1f2937;
   background: var(--card-bg);
   padding: 6px;
@@ -1722,6 +1735,40 @@ textarea {
   color: #fecaca;
   padding: 7px 8px;
   font-size: 0.74rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  animation: fadeInError 0.3s ease-out;
+}
+
+@keyframes fadeInError {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.error-dismiss {
+  background: none;
+  border: none;
+  color: #fca5a5;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.error-dismiss:hover {
+  opacity: 1;
 }
 
 .bottom-strip {
@@ -1889,8 +1936,13 @@ textarea {
 }
 
 @keyframes fadeInOverlay {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .loading-overlay-content {
@@ -1902,7 +1954,7 @@ textarea {
   border-radius: 16px;
   background: var(--overlay-panel-bg);
   border: 1px solid rgba(59, 130, 246, 0.2);
-  box-shadow: 0 0 80px rgba(59, 130, 246, 0.08), 0 8px 32px rgba(0,0,0,0.5);
+  box-shadow: 0 0 80px rgba(59, 130, 246, 0.08), 0 8px 32px rgba(0, 0, 0, 0.5);
 }
 
 /* CSS-only spinning ring */
@@ -1916,7 +1968,9 @@ textarea {
 }
 
 @keyframes spinRing {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .loading-step-text {
@@ -1981,10 +2035,12 @@ textarea {
   align-items: center;
   justify-content: center;
 }
+
 .ai-copilot-toggle:hover {
   transform: scale(1.1);
   box-shadow: 0 6px 30px rgba(245, 158, 11, 0.4), 0 0 60px rgba(245, 158, 11, 0.15);
 }
+
 .ai-toggle-icon {
   letter-spacing: 0.05em;
 }
@@ -2005,8 +2061,15 @@ textarea {
 }
 
 @keyframes slideInPanel {
-  from { transform: translateX(100%); opacity: 0; }
-  to   { transform: translateX(0); opacity: 1; }
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 .ai-copilot-header {
@@ -2063,6 +2126,7 @@ textarea {
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s;
 }
+
 .ai-header-btn:hover {
   color: #f59e0b;
   border-color: #f59e0b;
@@ -2086,11 +2150,13 @@ textarea {
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
+
 .ai-quick-btn:hover:not(:disabled) {
   background: var(--nav-item-active-bg);
   border-color: #f59e0b;
   color: #fbbf24;
 }
+
 .ai-quick-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -2161,8 +2227,15 @@ textarea {
 }
 
 @keyframes fadeInMsg {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .ai-msg-user {
@@ -2222,8 +2295,15 @@ textarea {
 }
 
 @keyframes pulseDot {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
+
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 .ai-msg-markdown {
@@ -2239,6 +2319,7 @@ textarea {
 .ai-msg-markdown p {
   margin: 0 0 8px 0;
 }
+
 .ai-msg-markdown p:last-child {
   margin-bottom: 0;
 }
@@ -2289,11 +2370,13 @@ textarea {
   border: 1px solid #1e3a5f;
   border-radius: 6px;
 }
+
 .ai-recal-header {
   display: flex;
   gap: 8px;
   align-items: center;
 }
+
 .ai-recal-btn {
   padding: 6px 14px;
   border: 1px solid #8b5cf6;
@@ -2305,14 +2388,17 @@ textarea {
   cursor: pointer;
   transition: all 0.2s;
 }
+
 .ai-recal-btn:hover:not(:disabled) {
   background: rgba(139, 92, 246, 0.3);
   color: #e0d5ff;
 }
+
 .ai-recal-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
 .ai-recal-btn-custom {
   margin-top: 8px;
   width: 100%;
@@ -2320,9 +2406,11 @@ textarea {
   background: rgba(34, 197, 94, 0.12);
   color: #86efac;
 }
+
 .ai-recal-btn-custom:hover:not(:disabled) {
   background: rgba(34, 197, 94, 0.25);
 }
+
 .ai-recal-edit-btn {
   padding: 4px 10px;
   border: 1px solid #374151;
@@ -2332,10 +2420,12 @@ textarea {
   font-size: 10px;
   cursor: pointer;
 }
+
 .ai-recal-edit-btn:hover {
   background: #1f2937;
   color: #e5e7eb;
 }
+
 .ai-recal-params-preview {
   margin-top: 6px;
   font-size: 10px;
@@ -2343,12 +2433,14 @@ textarea {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   letter-spacing: 0.3px;
 }
+
 .ai-recal-editor {
   margin-top: 10px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
+
 .ai-recal-field {
   display: flex;
   align-items: center;
@@ -2356,12 +2448,14 @@ textarea {
   font-size: 11px;
   color: #9ca3af;
 }
+
 .ai-recal-field span {
   min-width: 16px;
   font-weight: 600;
   color: #c4b5fd;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
+
 .ai-recal-field input {
   width: 100%;
   padding: 4px 6px;
@@ -2372,6 +2466,7 @@ textarea {
   font-size: 11px;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
+
 .ai-recal-field input:focus {
   outline: none;
   border-color: #8b5cf6;
@@ -2396,10 +2491,12 @@ textarea {
   font-family: inherit;
   line-height: 1.4;
 }
+
 .ai-input:focus {
   outline: none;
   border-color: #f59e0b;
 }
+
 .ai-input::placeholder {
   color: #4b5563;
 }
@@ -2415,9 +2512,11 @@ textarea {
   transition: background 0.15s;
   align-self: flex-end;
 }
+
 .ai-send-btn:hover:not(:disabled) {
   background: #9a3412;
 }
+
 .ai-send-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -2432,6 +2531,7 @@ textarea {
   .ai-copilot-panel {
     width: 360px;
   }
+
   .bbg-shell.ai-open .bbg-main {
     margin-right: 360px;
   }

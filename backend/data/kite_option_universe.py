@@ -40,6 +40,13 @@ class KiteOptionUniverse:
         return tokens
 
 
+# Map option symbol to its NSE underlying trading symbol
+_SYMBOL_TO_UNDERLYING: Dict[str, str] = {
+    "NIFTY": "NSE:NIFTY 50",
+    "BANKNIFTY": "NSE:NIFTY BANK",
+}
+
+
 class KiteOptionUniverseBuilder:
     def __init__(self, underlying_symbol: str = "NSE:NIFTY 50") -> None:
         self._logger = get_logger(self.__class__.__name__)
@@ -84,6 +91,11 @@ class KiteOptionUniverseBuilder:
         symbol: str = "NIFTY",
         max_expiries: int = 5,
     ) -> KiteOptionUniverse:
+        # Resolve the correct underlying NSE symbol for this option symbol
+        resolved_underlying = _SYMBOL_TO_UNDERLYING.get(
+            symbol.upper(), self._underlying_symbol
+        )
+
         instrument_map: Dict[int, KiteInstrumentMeta] = {}
         expiry_map: Dict[date, List[int]] = {}
 
@@ -130,11 +142,15 @@ class KiteOptionUniverseBuilder:
             if meta.expiry in expiry_map
         }
 
-        underlying_token = self._find_underlying_token(underlying_instruments=underlying_instruments)
+        underlying_token = self._find_underlying_token(
+            underlying_instruments=underlying_instruments,
+            resolved_underlying=resolved_underlying,
+        )
 
         self._logger.info(
-            "KITE_UNIVERSE | symbol=%s | expiries=%d | option_tokens=%d | underlying_token=%s",
+            "KITE_UNIVERSE | symbol=%s | underlying=%s | expiries=%d | option_tokens=%d | underlying_token=%s",
             symbol,
+            resolved_underlying,
             len(expiry_map),
             len(instrument_map),
             underlying_token,
@@ -144,7 +160,7 @@ class KiteOptionUniverseBuilder:
             symbol=symbol.upper(),
             instrument_map=instrument_map,
             expiry_map=expiry_map,
-            underlying_symbol=self._underlying_symbol,
+            underlying_symbol=resolved_underlying,
             underlying_token=underlying_token,
         )
 
@@ -152,11 +168,13 @@ class KiteOptionUniverseBuilder:
         self,
         *,
         underlying_instruments: Optional[Iterable[Mapping[str, Any]]],
+        resolved_underlying: Optional[str] = None,
     ) -> Optional[int]:
         if not underlying_instruments:
             return None
 
-        exchange, _, tradingsymbol = self._underlying_symbol.partition(":")
+        target = resolved_underlying or self._underlying_symbol
+        exchange, _, tradingsymbol = target.partition(":")
         exchange = exchange.upper()
         tradingsymbol = tradingsymbol.upper()
 

@@ -22,7 +22,8 @@ def _load_local_env_files() -> None:
 
 
 _load_local_env_files()
-DATA_SOURCE = os.getenv("DATA_SOURCE", "NSE").upper()
+# Force data source to ZERODHA (Kite), disabling NSE
+DATA_SOURCE = "ZERODHA"
 
 
 @dataclass(frozen=True)
@@ -54,10 +55,10 @@ class ZerodhaConfig:
     underlying_symbol: str = field(default_factory=lambda: os.getenv("KITE_UNDERLYING_SYMBOL", "NSE:NIFTY 50"))
     underlying_name: str = field(default_factory=lambda: os.getenv("KITE_UNDERLYING_NAME", "NIFTY 50"))
     snapshot_timeout_seconds: float = field(
-        default_factory=lambda: float(os.getenv("KITE_SNAPSHOT_TIMEOUT_SECONDS", "8.0"))
+        default_factory=lambda: float(os.getenv("KITE_SNAPSHOT_TIMEOUT_SECONDS", "15.0"))
     )
     max_instruments_per_subscription: int = field(
-        default_factory=lambda: int(os.getenv("KITE_MAX_INSTRUMENTS_PER_SUBSCRIPTION", "3000"))
+        default_factory=lambda: int(os.getenv("KITE_MAX_INSTRUMENTS_PER_SUBSCRIPTION", "500"))
     )
 
 

@@ -1,6 +1,8 @@
+
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -181,6 +183,14 @@ _kite_auth = KiteAuthService()
 _orchestrator = OrchestratorAgent()
 _strategy_picker = StrategyPickerAgent()
 _positioning = PositioningService()
+
+
+# --- Kite token info endpoint for frontend token expiry check ---
+@router.get("/token-info")
+def get_token_info():
+    token = os.getenv("KITE_ACCESS_TOKEN", "")
+    updated_at = os.getenv("KITE_TOKEN_UPDATED_AT", "")
+    return {"token": token, "updated_at": updated_at}
 
 
 @router.post("/positioning/calculate")

@@ -25,6 +25,14 @@ class PositioningPayload(BaseModel):
     risk_free_rate: float = Field(default=0.065)
 
 
+class MonteCarloVariantPayload(BaseModel):
+    data_id: str = Field(description="Cache key returned by /api/v1/data/fetch-live")
+    risk_free_rate: float = Field(default=0.065)
+    dividend_yield: float = Field(default=0.012)
+    path_count: int = Field(default=2500, ge=500, le=10000)
+    time_steps: int = Field(default=96, ge=16, le=256)
+
+
 class StaticPipelinePayload(BaseModel):
     file_path: str
     db_path: str = "backend/vol_engine.db"
@@ -163,6 +171,27 @@ def calculate_dealer_positioning(payload: PositioningPayload) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         _logger.exception("ERROR | calculate_dealer_positioning")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/surface/monte-carlo-variant")
+def calculate_monte_carlo_variant(payload: MonteCarloVariantPayload) -> dict:
+    _logger.info("START | calculate_monte_carlo_variant | data_id=%s", payload.data_id)
+    try:
+        result = _engine.build_monte_carlo_surface_variant(
+            data_id=payload.data_id,
+            risk_free_rate=payload.risk_free_rate,
+            dividend_yield=payload.dividend_yield,
+            path_count=payload.path_count,
+            time_steps=payload.time_steps,
+        )
+        _logger.info("END | calculate_monte_carlo_variant")
+        return {"status": "ok", "data": result}
+    except ValueError as exc:
+        _logger.warning("WARN | calculate_monte_carlo_variant | %s", exc)
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        _logger.exception("ERROR | calculate_monte_carlo_variant")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
-import { fetchDealerPositioning } from '../../api/client';
+import { fetchDealerPositioning, fetchMonteCarloVariant } from '../../api/client';
 import { bsmGreeks } from '../../utils/bsmGreeks';
 
 function clamp(value, min, max) {
@@ -56,6 +56,7 @@ const MODEL_LABELS = {
   Heston: 'Heston',
   SABR: 'SABR',
   BSM: 'BSM',
+  MonteCarlo: 'Monte Carlo',
   Avg3: 'Avg 3',
 };
 
@@ -74,6 +75,103 @@ function nearestIndex(values, target) {
   ), 0);
 }
 
+function describeZone(tag, exposureValue) {
+  if (tag === 'Call Wall') {
+    return 'Call Wall means heavy overhead call positioning. Price often slows down or faces resistance near this strike.';
+  }
+  if (tag === 'Put Wall') {
+    return 'Put Wall means stronger downside put support. Price often stabilizes or finds a floor near this strike.';
+  }
+  if (tag === 'Pin Zone') {
+    const colorHint = Number(exposureValue) >= 0 ? 'green-toned pin zone' : 'red-toned pin zone';
+    return `Pin Zone means price can get magnetized around this strike into expiry. A ${colorHint} usually signals more stabilizing pressure, while red suggests weaker or more fragile pinning.`;
+  }
+  if (tag === 'Support') {
+    return 'Support means positive dealer positioning can help cushion downside moves around this strike.';
+  }
+  if (tag === 'Resistance') {
+    return 'Resistance means upside can run into positioning pressure around this strike.';
+  }
+  if (tag === 'Air Pocket') {
+    return 'Air Pocket means thinner stabilizing support. If price moves here, it can travel faster.';
+  }
+  if (tag === 'Flip Zone') {
+    return 'Flip Zone means gamma can change sign around here, so market behavior may become less stable if price crosses it.';
+  }
+  return 'This zone is informational and reflects how positioning is clustered around the selected strike.';
+}
+
+function describeStrikeContext(row, spot) {
+  if (!row) return '-';
+  const distance = Number(row.strike) - Number(spot);
+  const absDistance = Math.abs(distance);
+  if (row.isAtm || absDistance <= 25) {
+    return 'This is effectively the pivot strike. Premium discovery here matters most because both call and put interest are still competing for control.';
+  }
+  if (distance > 0) {
+    return absDistance <= 150
+      ? 'This strike sits just above spot, so it acts like nearby overhead where upside momentum starts meeting call supply.'
+      : 'This strike is well above spot, so it behaves more like an upper reference level than an immediate trading magnet.';
+  }
+  return absDistance <= 150
+    ? 'This strike sits just below spot, so it acts like nearby downside support where put hedging can become active.'
+    : 'This strike is meaningfully below spot, so it is more of a lower support marker than a near-term pivot.';
+}
+
+function describeVolAndStraddle(row, atmRow) {
+  if (!row) return '-';
+  const rowIvPct = Number(row.iv) * 100;
+  const atmIvPct = Number(atmRow?.iv ?? row.iv) * 100;
+  const ivDiff = rowIvPct - atmIvPct;
+  const straddle = Number(row.straddleNotional);
+  const atmStraddle = Number(atmRow?.straddleNotional ?? straddle);
+
+  let ivRead = `Market IV is ${Number.isFinite(rowIvPct) && rowIvPct > 0 ? `${formatNumber(rowIvPct, 2)}%` : 'not available'}`;
+  if (Number.isFinite(ivDiff) && Math.abs(ivDiff) >= 0.35) {
+    ivRead += ivDiff > 0
+      ? `, which is ${formatNumber(ivDiff, 2)} pts richer than the ATM reference`
+      : `, which is ${formatNumber(Math.abs(ivDiff), 2)} pts cheaper than the ATM reference`;
+  }
+
+  let straddleRead = `straddle notional is ${formatRsValue(straddle)}`;
+  if (Number.isFinite(atmStraddle) && atmStraddle > 0 && Math.abs(straddle - atmStraddle) / atmStraddle >= 0.08) {
+    straddleRead += straddle > atmStraddle
+      ? ', so this strike is pricing a bigger local move than ATM'
+      : ', so this strike is pricing a smaller local move than ATM';
+  }
+
+  return `${ivRead} and ${straddleRead}.`;
+}
+
+function describePremiumBalance(row) {
+  if (!row) return '-';
+  const call = Number(row.callNotional);
+  const put = Number(row.putNotional);
+  const total = Math.max(call + put, 1);
+  const callShare = call / total;
+
+  if (callShare >= 0.62) {
+    return `Call premium is ${formatRsValue(call)} versus put premium of ${formatRsValue(put)}, so the strike is still call-heavy and upside optionality is dominating the price.`;
+  }
+  if (callShare <= 0.38) {
+    return `Put premium is ${formatRsValue(put)} versus call premium of ${formatRsValue(call)}, so downside protection is carrying more of the premium load here.`;
+  }
+  return `Call premium is ${formatRsValue(call)} versus put premium of ${formatRsValue(put)}, which tells us pricing is still fairly balanced on both sides of the strike.`;
+}
+
+function describeExposureInsight(row, exposureView) {
+  if (!row) return '-';
+  if (exposureView !== 'hidden' && row.exposureValue != null) {
+    return `${EXPOSURE_LABELS[exposureView]} exposure reads ${formatSignedRs(row.exposureValue)}. ${describeZone(row.exposureTag, row.exposureValue)}`;
+  }
+  if (row.exposureTag && row.exposureTag !== '-') {
+    return describeZone(row.exposureTag, row.exposureValue);
+  }
+  return row.isAtm
+    ? 'No extreme wall is visible here, but ATM still matters because small price changes can quickly rebalance the whole chain.'
+    : 'No major wall or flip is concentrated exactly here, so this strike matters more as part of the surrounding cluster than as a standalone level.';
+}
+
 export default function OptionChainPage({
   loading = false,
   activeSnapshotId = null,
@@ -90,7 +188,13 @@ export default function OptionChainPage({
   const [greekView, setGreekView] = useState('core');
   const [modelView, setModelView] = useState('hidden');
   const [exposureView, setExposureView] = useState('hidden');
+  const [chainView, setChainView] = useState('table');
+  const [detailCardEnabled, setDetailCardEnabled] = useState(true);
+  const [parityCheckEnabled, setParityCheckEnabled] = useState(false);
+  const [hoveredStrike, setHoveredStrike] = useState(null);
+  const [focusedStrike, setFocusedStrike] = useState(null);
   const [positioning, setPositioning] = useState(null);
+  const [monteCarloVariant, setMonteCarloVariant] = useState(null);
 
   useEffect(() => {
     setLocalExpiryIndex(selectedExpiryIndex);
@@ -119,6 +223,29 @@ export default function OptionChainPage({
       active = false;
     };
   }, [liveDataId]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadMonteCarloVariant() {
+      if (modelView !== 'MonteCarlo' || !liveDataId) {
+        return;
+      }
+      try {
+        const response = await fetchMonteCarloVariant(liveDataId);
+        if (active) {
+          setMonteCarloVariant(response?.data ?? null);
+        }
+      } catch {
+        if (active) {
+          setMonteCarloVariant(null);
+        }
+      }
+    }
+    loadMonteCarloVariant();
+    return () => {
+      active = false;
+    };
+  }, [liveDataId, modelView]);
 
   const strikeGrid = Array.isArray(surface?.strike_grid) ? surface.strike_grid.map(Number) : [];
   const expiryLabels = Array.isArray(surface?.expiry_labels) ? surface.expiry_labels : [];
@@ -219,6 +346,7 @@ export default function OptionChainPage({
     const putMidRow = Array.isArray(putMidMatrix[expiryIndex]) ? putMidMatrix[expiryIndex] : [];
     const hestonIvRow = Array.isArray(modelVariants?.Heston?.model_iv_matrix?.[expiryIndex]) ? modelVariants.Heston.model_iv_matrix[expiryIndex] : [];
     const sabrIvRow = Array.isArray(modelVariants?.SABR?.model_iv_matrix?.[expiryIndex]) ? modelVariants.SABR.model_iv_matrix[expiryIndex] : [];
+    const monteCarloIvRow = Array.isArray(monteCarloVariant?.model_iv_matrix?.[expiryIndex]) ? monteCarloVariant.model_iv_matrix[expiryIndex] : [];
     const exposureSeries = positioningView.series?.[exposureView] ?? [];
     const exposureAbs = exposureSeries.map((value) => Math.abs(Number(value) || 0)).filter((value) => value > 0).sort((a, b) => a - b);
     const exposureThreshold = exposureAbs.length ? exposureAbs[Math.floor(exposureAbs.length * 0.7)] : 0;
@@ -251,8 +379,9 @@ export default function OptionChainPage({
 
       const hestonIv = Number(hestonIvRow[index] ?? 0);
       const sabrIv = Number(sabrIvRow[index] ?? 0);
+      const monteCarloIv = Number(monteCarloIvRow[index] ?? 0);
       const bsmIv = atmIvFallback > 0 ? atmIvFallback : iv;
-      const avg3Pool = [hestonIv, sabrIv, bsmIv].filter((value) => Number.isFinite(value) && value > 0);
+      const avg3Pool = [hestonIv, sabrIv, bsmIv, monteCarloIv].filter((value) => Number.isFinite(value) && value > 0);
       const avg3Iv = avg3Pool.length ? avg3Pool.reduce((sum, value) => sum + value, 0) / avg3Pool.length : 0;
 
       const modelSlices = Object.fromEntries(
@@ -260,6 +389,7 @@ export default function OptionChainPage({
           Heston: hestonIv,
           SABR: sabrIv,
           BSM: bsmIv,
+          MonteCarlo: monteCarloIv,
           Avg3: avg3Iv,
         }).map(([modelName, sigma]) => {
           const callModel = sigma > 0 ? bsmGreeks(spot, strike, expiryT, sigma, riskFreeRate, true) : null;
@@ -279,18 +409,29 @@ export default function OptionChainPage({
         : null;
       const callProbItm = Number.isFinite(d2) ? normCdf(d2) : null;
       const putProbItm = Number.isFinite(d2) ? 1 - normCdf(d2) : null;
+      const discountFactor = Math.exp(-riskFreeRate * expiryT);
+      const parityPut = callDisplayPrice - spot + strike * discountFactor;
+      const parityCall = putDisplayPrice + spot - strike * discountFactor;
 
       const exposureIdx = nearestIndex(positioningView.strikes, strike);
       const exposureValue = exposureIdx >= 0 ? Number(exposureSeries[exposureIdx] ?? 0) : null;
       const isNearFlip = Number.isFinite(positioningView.metrics.gammaFlipLevel)
         && Math.abs(strike - positioningView.metrics.gammaFlipLevel) <= strikeStep * 0.75;
-      const wall = positioningView.walls.find((item) => Math.abs(Number(item?.strike ?? 0) - strike) <= strikeStep * 0.5) ?? null;
+      const wall = positioningView.walls.find((item) => Math.abs(Number(item?.strike ?? 0) - strike) <= strikeStep * 0.25) ?? null;
       let exposureTag = '-';
       if (exposureView !== 'hidden') {
         if (isNearFlip) {
           exposureTag = 'Flip Zone';
+        } else if (Math.abs(strike - spot) <= strikeStep * 0.6) {
+          exposureTag = 'Pin Zone';
         } else if (wall) {
-          exposureTag = Number(wall.strike) >= spot ? 'Call Wall' : 'Put Wall';
+          if (strike > spot) {
+            exposureTag = 'Call Wall';
+          } else if (strike < spot) {
+            exposureTag = 'Put Wall';
+          } else {
+            exposureTag = 'Pin Zone';
+          }
         } else if (Number.isFinite(exposureValue) && Math.abs(exposureValue) >= exposureThreshold && exposureThreshold > 0) {
           if (exposureView === 'gamma') {
             exposureTag = exposureValue >= 0
@@ -330,6 +471,8 @@ export default function OptionChainPage({
         putProbItm,
         expiryT,
         modelSlices,
+        parityCall,
+        parityPut,
         exposureValue,
         exposureTag,
         isFlipZone: isNearFlip,
@@ -343,6 +486,7 @@ export default function OptionChainPage({
     expiryIndex,
     exposureView,
     positioningView,
+    monteCarloVariant,
     marketMatrix,
     modelVariants,
     callMarketPriceMatrix,
@@ -369,6 +513,16 @@ export default function OptionChainPage({
     }
     return aroundAtm;
   }, [rows, atmIndex, strikeWindow, rowMode, spot]);
+
+  const activeStrike = focusedStrike ?? (detailCardEnabled ? hoveredStrike : null);
+  const activeRow = useMemo(
+    () => (activeStrike == null ? null : visibleRows.find((row) => row.strike === activeStrike) || null),
+    [activeStrike, visibleRows],
+  );
+  const atmVisibleRow = useMemo(
+    () => visibleRows.find((row) => row.isAtm) || rows.find((row) => row.isAtm) || null,
+    [rows, visibleRows],
+  );
 
   const chainMetrics = useMemo(() => {
     if (!rows.length) {
@@ -440,6 +594,14 @@ export default function OptionChainPage({
         <Panel title="Dynamic Option Chain">
           <div className="option-chain-toolbar">
             <label>
+              Display
+              <select value={chainView} onChange={(event) => setChainView(event.target.value)}>
+                <option value="table">Table</option>
+                <option value="ladder">Dealer Ladder</option>
+                <option value="heatmap">Heatmap</option>
+              </select>
+            </label>
+            <label>
               Expiry
               <select value={expiryIndex} onChange={(event) => handleExpiryChange(event.target.value)}>
                 {expiryOptions.map((option) => (
@@ -479,6 +641,7 @@ export default function OptionChainPage({
                 <option value="Heston">Heston</option>
                 <option value="SABR">SABR</option>
                 <option value="BSM">BSM</option>
+                <option value="MonteCarlo">Monte Carlo</option>
                 <option value="Avg3">Avg 3</option>
               </select>
             </label>
@@ -542,6 +705,42 @@ export default function OptionChainPage({
             </div>
           </div>
 
+          <div className="option-chain-toggle-row">
+            <label className="option-chain-toggle-label">
+              Parity Check
+              <button
+                type="button"
+                className={`option-chain-toggle${parityCheckEnabled ? ' active' : ''}`}
+                onClick={() => setParityCheckEnabled((current) => !current)}
+                aria-pressed={parityCheckEnabled}
+              >
+                <span className="option-chain-toggle-knob" />
+                <span>{parityCheckEnabled ? 'On' : 'Off'}</span>
+              </button>
+            </label>
+            <label className="option-chain-toggle-label">
+              Detail Card
+              <button
+                type="button"
+                className={`option-chain-toggle${detailCardEnabled ? ' active' : ''}`}
+                onClick={() => {
+                  setDetailCardEnabled((current) => {
+                    const next = !current;
+                    if (!next) {
+                      setHoveredStrike(null);
+                      setFocusedStrike(null);
+                    }
+                    return next;
+                  });
+                }}
+                aria-pressed={detailCardEnabled}
+              >
+                <span className="option-chain-toggle-knob" />
+                <span>{detailCardEnabled ? 'On' : 'Off'}</span>
+              </button>
+            </label>
+          </div>
+
           {exposureView !== 'hidden' && (
             <div className="option-chain-legend">
               <span className="stabilizing">Green = stabilizing/sticky</span>
@@ -550,6 +749,7 @@ export default function OptionChainPage({
             </div>
           )}
 
+          {chainView === 'table' && (
           <div className="option-chain-table-wrap">
             <table className="dense-table option-chain-table">
               <thead>
@@ -559,6 +759,8 @@ export default function OptionChainPage({
                   <th>Call ₹</th>
                   {modelView !== 'hidden' && <th>{MODEL_LABELS[modelView]} Call ₹</th>}
                   {modelView !== 'hidden' && <th>Market-Model Call ₹</th>}
+                  {parityCheckEnabled && <th>Parity Call ₹</th>}
+                  {parityCheckEnabled && <th>Market-Parity Call ₹</th>}
                   {visibleGreekKeys.map((key) => (
                     <th key={`call-${key}`}>{GREEK_LABELS[key]} C</th>
                   ))}
@@ -576,6 +778,8 @@ export default function OptionChainPage({
                   <th>Put ₹</th>
                   {modelView !== 'hidden' && <th>{MODEL_LABELS[modelView]} Put ₹</th>}
                   {modelView !== 'hidden' && <th>Market-Model Put ₹</th>}
+                  {parityCheckEnabled && <th>Parity Put ₹</th>}
+                  {parityCheckEnabled && <th>Market-Parity Put ₹</th>}
                   {visibleGreekKeys.map((key) => (
                     <th key={`put-${key}`}>{GREEK_LABELS[key]} P</th>
                   ))}
@@ -605,13 +809,18 @@ export default function OptionChainPage({
                   return (
                     <tr
                       key={`${expiryIndex}-${row.strike}`}
-                      className={`${rowClass}${row.isFlipZone ? ' flip-zone' : ''}${row.isWall ? ' wall-zone' : ''}`}
+                      className={`${rowClass}${row.isFlipZone ? ' flip-zone' : ''}${row.isWall ? ' wall-zone' : ''}${focusedStrike === row.strike ? ' is-focused' : ''}`}
+                      onMouseEnter={() => setHoveredStrike(row.strike)}
+                      onMouseLeave={() => setHoveredStrike(null)}
+                      onClick={() => setFocusedStrike((current) => (current === row.strike ? null : row.strike))}
                     >
                       <td className="option-chain-center">{formatNumber(row.callLtp, 2)}</td>
                       <td className="option-chain-center">{formatNumber(row.callMid, 2)}</td>
                       <td className="call-side option-chain-center">{formatRsValue(row.callNotional)}</td>
                       {modelView !== 'hidden' && <td className="option-chain-center">{modelSlice?.callPrice != null ? formatRsValue(modelSlice.callPrice * lotSize) : '-'}</td>}
                       {modelView !== 'hidden' && <td className="option-chain-center">{modelSlice?.callPrice != null ? formatRsValue((row.callDisplayPrice - modelSlice.callPrice) * lotSize) : '-'}</td>}
+                      {parityCheckEnabled && <td className="option-chain-center">{formatRsValue(row.parityCall * lotSize)}</td>}
+                      {parityCheckEnabled && <td className="option-chain-center">{formatRsValue((row.callDisplayPrice - row.parityCall) * lotSize)}</td>}
                       {visibleGreekKeys.map((key) => (
                         <td key={`call-${row.strike}-${key}`} className="option-chain-center">
                           {row.callGreeks ? formatNumber(row.callGreeks[key], key === 'gamma' ? 5 : 3) : '-'}
@@ -652,6 +861,8 @@ export default function OptionChainPage({
                       <td className="put-side option-chain-center">{formatRsValue(row.putNotional)}</td>
                       {modelView !== 'hidden' && <td className="option-chain-center">{modelSlice?.putPrice != null ? formatRsValue(modelSlice.putPrice * lotSize) : '-'}</td>}
                       {modelView !== 'hidden' && <td className="option-chain-center">{modelSlice?.putPrice != null ? formatRsValue((row.putDisplayPrice - modelSlice.putPrice) * lotSize) : '-'}</td>}
+                      {parityCheckEnabled && <td className="option-chain-center">{formatRsValue(row.parityPut * lotSize)}</td>}
+                      {parityCheckEnabled && <td className="option-chain-center">{formatRsValue((row.putDisplayPrice - row.parityPut) * lotSize)}</td>}
                       {visibleGreekKeys.map((key) => (
                         <td key={`put-${row.strike}-${key}`} className="option-chain-center">
                           {row.putGreeks ? formatNumber(row.putGreeks[key], key === 'gamma' ? 5 : 3) : '-'}
@@ -665,7 +876,114 @@ export default function OptionChainPage({
               </tbody>
             </table>
           </div>
+          )}
+
+          {chainView === 'ladder' && (
+            <div className="option-chain-ladder">
+              {visibleRows.map((row) => {
+                const modelSlice = modelView !== 'hidden' ? row.modelSlices?.[modelView] : null;
+                const callIntensity = Math.min(1, Math.max(0.08, row.callNotional / Math.max(...visibleRows.map((item) => item.callNotional || 0), 1)));
+                const putIntensity = Math.min(1, Math.max(0.08, row.putNotional / Math.max(...visibleRows.map((item) => item.putNotional || 0), 1)));
+                return (
+                  <button
+                    key={`ladder-${row.strike}`}
+                    type="button"
+                    className={`option-chain-ladder-row${row.isAtm ? ' atm' : ''}${focusedStrike === row.strike ? ' is-focused' : ''}`}
+                    onMouseEnter={() => setHoveredStrike(row.strike)}
+                    onMouseLeave={() => setHoveredStrike(null)}
+                    onClick={() => setFocusedStrike((current) => (current === row.strike ? null : row.strike))}
+                  >
+                    <div className="ladder-side call" style={{ opacity: callIntensity }}>
+                      <strong>{formatRsValue(row.callNotional)}</strong>
+                      <span>{formatNumber(row.callLtp, 2)} LTP</span>
+                    </div>
+                    <div className="ladder-center">
+                      <strong>{formatNumber(row.strike, 0)}</strong>
+                      <span>{row.exposureTag}</span>
+                      <small>{row.iv > 0 ? `${formatNumber(row.iv * 100, 2)}% IV` : '-'}</small>
+                    </div>
+                    <div className="ladder-side put" style={{ opacity: putIntensity }}>
+                      <strong>{formatRsValue(row.putNotional)}</strong>
+                      <span>{formatNumber(row.putLtp, 2)} LTP</span>
+                    </div>
+                    {(exposureView !== 'hidden' || modelView !== 'hidden') && (
+                      <div className="ladder-meta">
+                        {exposureView !== 'hidden' && <span>{formatSignedRs(row.exposureValue)}</span>}
+                        {modelView !== 'hidden' && <span>{modelSlice?.iv > 0 ? `${formatNumber(modelSlice.iv * 100, 2)}% ${MODEL_LABELS[modelView]}` : '-'}</span>}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {chainView === 'heatmap' && (
+            <div className="option-chain-heatmap">
+              {visibleRows.map((row) => {
+                const richness = modelView !== 'hidden' && row.modelSlices?.[modelView]?.iv > 0 && row.iv > 0
+                  ? (row.iv - row.modelSlices[modelView].iv) * 100
+                  : 0;
+                const tone = richness > 0.75 ? 'rich' : richness < -0.75 ? 'cheap' : 'flat';
+                return (
+                  <button
+                    key={`heat-${row.strike}`}
+                    type="button"
+                    className={`option-chain-heatmap-cell ${tone}${row.isAtm ? ' atm' : ''}${focusedStrike === row.strike ? ' is-focused' : ''}`}
+                    onMouseEnter={() => setHoveredStrike(row.strike)}
+                    onMouseLeave={() => setHoveredStrike(null)}
+                    onClick={() => setFocusedStrike((current) => (current === row.strike ? null : row.strike))}
+                  >
+                    <span className="heatmap-strike">{formatNumber(row.strike, 0)}</span>
+                    <strong>{formatRsValue(row.straddleNotional)}</strong>
+                    <small>{row.exposureTag}</small>
+                    <div className="heatmap-bars">
+                      <div className="heatmap-bar call" style={{ width: `${Math.min(100, (row.callNotional / Math.max(...visibleRows.map((item) => item.straddleNotional || 1), 1)) * 100)}%` }} />
+                      <div className="heatmap-bar put" style={{ width: `${Math.min(100, (row.putNotional / Math.max(...visibleRows.map((item) => item.straddleNotional || 1), 1)) * 100)}%` }} />
+                    </div>
+                    <em>{row.iv > 0 ? `${formatNumber(row.iv * 100, 2)}% IV` : '-'}</em>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </Panel>
+
+        {detailCardEnabled && activeRow && (
+          <div className="option-chain-floating-card">
+            <div className="option-chain-focus-top">
+              <div>
+                <span>Focus Strike</span>
+                <strong>{formatNumber(activeRow.strike, 0)}</strong>
+              </div>
+              <div>
+                <span>Read</span>
+                <strong>{activeRow.exposureTag || (activeRow.isAtm ? 'ATM Pivot' : '-')}</strong>
+              </div>
+              <div>
+                <span>Hover / Click</span>
+                <strong>{focusedStrike != null ? 'Locked' : 'Live'}</strong>
+              </div>
+              {focusedStrike != null && (
+                <button type="button" className="option-chain-focus-close" onClick={() => setFocusedStrike(null)}>
+                  Close
+                </button>
+              )}
+            </div>
+            <div className="option-chain-focus-copy">
+              <p>
+                {describeStrikeContext(activeRow, spot)}
+              </p>
+              <p>{describeVolAndStraddle(activeRow, atmVisibleRow)}</p>
+              <p>{describeExposureInsight(activeRow, exposureView)}</p>
+              <p>
+                {modelView !== 'hidden' && activeRow.modelSlices?.[modelView]?.iv > 0
+                  ? `${MODEL_LABELS[modelView]} prices this strike at ${formatNumber(activeRow.modelSlices[modelView].iv * 100, 2)}% IV, leaving a market-model gap of ${formatNumber((activeRow.iv - activeRow.modelSlices[modelView].iv) * 100, 2)} pts.`
+                  : describePremiumBalance(activeRow)}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     </SnapshotGuard>
   );

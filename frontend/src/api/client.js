@@ -461,6 +461,25 @@ export async function fetchDealerPositioning(dataId) {
   });
 }
 
+export async function fetchMonteCarloVariant(dataId, options = {}) {
+  const {
+    riskFreeRate = 0.065,
+    dividendYield = 0.012,
+    pathCount = 2500,
+    timeSteps = 96,
+  } = options;
+  return request('/surface/monte-carlo-variant', {
+    method: 'POST',
+    body: JSON.stringify({
+      data_id: dataId,
+      risk_free_rate: riskFreeRate,
+      dividend_yield: dividendYield,
+      path_count: pathCount,
+      time_steps: timeSteps,
+    }),
+  });
+}
+
 export async function getNSEExpiries(symbol = 'NIFTY') {
   return request(`/data/expiries?symbol=${encodeURIComponent(symbol)}`);
 }

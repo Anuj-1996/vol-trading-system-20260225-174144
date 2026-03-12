@@ -68,6 +68,7 @@ class LivePipelineRequest:
 
 # In-memory cache for fetched NSE data (data_id -> FetchResult + cleaned records)
 _live_data_cache: Dict[str, Dict[str, Any]] = {}
+_mc_variant_cache: Dict[tuple[str, float, float, int, int], Dict[str, Any]] = {}
 _cache_lock = threading.Lock()
 
 NIFTY50_TICKERS = [
@@ -186,6 +187,92 @@ class StrategyEngineService:
         """Retrieve cached NSE data by data_id. Returns None if not found."""
         with _cache_lock:
             return _live_data_cache.get(data_id)
+
+    def build_monte_carlo_surface_variant(
+        self,
+        data_id: str,
+        risk_free_rate: float = 0.065,
+        dividend_yield: float = 0.012,
+        path_count: int = 2500,
+        time_steps: int = 96,
+    ) -> Dict[str, Any]:
+        cache_key = (data_id, float(risk_free_rate), float(dividend_yield), int(path_count), int(time_steps))
+        with _cache_lock:
+          cached_variant = _mc_variant_cache.get(cache_key)
+        if cached_variant is not None:
+            return cached_variant
+
+        cached = self.get_cached_nse_data(data_id)
+        if cached is None:
+            raise ValueError(
+                f"No cached NSE data for data_id={data_id}. "
+                "Fetch data first via /api/v1/data/fetch-live."
+            )
+
+        raw_records: List[OptionChainRawRecord] = cached["cleaned_records"]
+        spot: float = cached["spot"]
+        if not raw_records:
+            raise ValueError("Cached NSE data contains no records after cleaning.")
+
+        filtered = self._liquidity_filter.filter_records(records=raw_records, spot=spot)
+        surface = self._surface_builder.build_surface(records=filtered)
+        calibration_result, _, _, _ = self._calibrate_with_retries(
+            surface=surface,
+            filtered=filtered,
+            spot=spot,
+            rate=risk_free_rate,
+            dividend_yield=dividend_yield,
+        )
+
+        max_maturity = float(np.max(surface.maturity_grid))
+        simulation = self._monte_carlo.simulate(
+            params=calibration_result.parameters,
+            spot=spot,
+            maturity=max_maturity,
+            risk_free_rate=risk_free_rate,
+            path_count=path_count,
+            time_steps=time_steps,
+            full_path=True,
+        )
+        full_paths = simulation.full_price_paths
+        if full_paths is None:
+            raise SimulationError(message="Monte Carlo full-path output missing", context={"data_id": data_id})
+
+        mc_matrix = np.zeros((surface.maturity_grid.size, surface.strike_grid.size), dtype=float)
+        for maturity_index, maturity in enumerate(surface.maturity_grid):
+            maturity_value = float(maturity)
+            step_index = int(np.clip(round((maturity_value / max(max_maturity, 1e-8)) * time_steps), 0, time_steps))
+            path_slice = np.asarray(full_paths[step_index, :], dtype=float)
+            call_prices = np.exp(-risk_free_rate * maturity_value) * np.maximum(
+                path_slice[:, None] - surface.strike_grid[None, :],
+                0.0,
+            ).mean(axis=0)
+            mc_matrix[maturity_index, :] = self._pricer.implied_vol_from_call_prices(
+                call_prices=call_prices,
+                spot=spot,
+                strikes=surface.strike_grid,
+                maturity=maturity_value,
+                rate=risk_free_rate,
+                dividend_yield=dividend_yield,
+            )
+
+        sanitized = self._sanitize_model_surface_matrix(
+            model_iv_matrix=mc_matrix,
+            market_iv_matrix=surface.implied_vol_matrix,
+        )
+        result = {
+            "model": "MonteCarlo",
+            "model_iv_matrix": sanitized.tolist(),
+            "residual_iv_matrix": (sanitized - surface.implied_vol_matrix).tolist(),
+            "meta": {
+                "path_count": int(path_count),
+                "time_steps": int(time_steps),
+                "source_model": "Heston Monte Carlo",
+            },
+        }
+        with _cache_lock:
+            _mc_variant_cache[cache_key] = result
+        return result
 
     # ------------------------------------------------------------------
     # Live Pipeline: Run analysis on cached NSE data

@@ -144,6 +144,10 @@ class OptionChainIngestionService:
                     call_ask=self._to_float(row["Call Offer Price"]),
                     put_bid=self._to_float(row["Put Bid Price"]),
                     put_ask=self._to_float(row["Put Offer Price"]),
+                    call_oi=call_oi,
+                    put_oi=put_oi,
+                    call_volume=call_volume,
+                    put_volume=put_volume,
                 )
                 records.append(record)
 

@@ -15,6 +15,7 @@ from .engine_service import LivePipelineRequest, StrategyEngineService
 @dataclass
 class LiveSymbolState:
     symbol: str
+    source: str
     pipeline_params: Dict[str, Any]
     max_expiries: int
     refresh_interval_seconds: int
@@ -41,6 +42,10 @@ class LiveRefreshService:
         self._thread = threading.Thread(target=self._scheduler_loop, name="live-refresh-scheduler", daemon=True)
         self._thread.start()
 
+    @staticmethod
+    def _state_key(symbol: str, source: str) -> str:
+        return f"{str(source or 'NSE').upper()}::{str(symbol or 'NIFTY').upper()}"
+
     def shutdown(self) -> None:
         self._stop_event.set()
         if self._thread.is_alive():
@@ -54,12 +59,13 @@ class LiveRefreshService:
         max_expiries: int,
         pipeline_result: Dict[str, Any],
     ) -> None:
-        cached = self._engine.get_cached_nse_data(data_id)
+        cached = self._engine.get_cached_live_data(data_id)
         if cached is None:
             return
 
         fetch_result = cached.get("fetch_result")
         symbol = str(cached.get("symbol", "NIFTY")).upper()
+        source = str(cached.get("source", "NSE")).upper()
         live_metadata = {
             "data_id": data_id,
             "spot": cached.get("spot"),
@@ -68,9 +74,11 @@ class LiveRefreshService:
             "symbol": symbol,
             "timestamp": getattr(fetch_result, "timestamp", None),
             "record_count": len(cached.get("cleaned_records", []) or []),
+            "source": cached.get("source"),
         }
         self._upsert_success(
             symbol=symbol,
+            source=source,
             pipeline_params=pipeline_params,
             max_expiries=max_expiries,
             pipeline_result=pipeline_result,
@@ -81,6 +89,7 @@ class LiveRefreshService:
         self,
         *,
         symbol: str,
+        source: str = "NSE",
         pipeline_params: Optional[Dict[str, Any]] = None,
         max_expiries: Optional[int] = None,
         refresh_interval_seconds: Optional[int] = None,
@@ -89,17 +98,20 @@ class LiveRefreshService:
         reason: str = "manual",
     ) -> Dict[str, Any]:
         symbol_key = str(symbol or "NIFTY").upper()
+        source_key = str(source or "NSE").upper()
+        state_key = self._state_key(symbol_key, source_key)
         with self._lock:
-            state = self._states.get(symbol_key)
+            state = self._states.get(state_key)
             if state is None:
                 state = LiveSymbolState(
                     symbol=symbol_key,
+                    source=source_key,
                     pipeline_params=dict(pipeline_params or {}),
                     max_expiries=int(max_expiries or 5),
                     refresh_interval_seconds=int(refresh_interval_seconds or 240),
                     auto_refresh_enabled=True if auto_refresh_enabled is None else bool(auto_refresh_enabled),
                 )
-                self._states[symbol_key] = state
+                self._states[state_key] = state
             else:
                 if pipeline_params:
                     state.pipeline_params = {**state.pipeline_params, **pipeline_params}
@@ -129,20 +141,23 @@ class LiveRefreshService:
 
         worker = threading.Thread(
             target=self._refresh_symbol,
-            kwargs={"symbol": symbol_key, "reason": reason},
-            name=f"live-refresh-{symbol_key.lower()}",
+            kwargs={"symbol": symbol_key, "source": source_key, "reason": reason},
+            name=f"live-refresh-{source_key.lower()}-{symbol_key.lower()}",
             daemon=True,
         )
         worker.start()
-        return self.get_status(symbol_key)
+        return self.get_status(symbol_key, source=source_key)
 
-    def get_status(self, symbol: str) -> Dict[str, Any]:
+    def get_status(self, symbol: str, *, source: str = "NSE") -> Dict[str, Any]:
         symbol_key = str(symbol or "NIFTY").upper()
+        source_key = str(source or "NSE").upper()
+        state_key = self._state_key(symbol_key, source_key)
         with self._lock:
-            state = self._states.get(symbol_key)
+            state = self._states.get(state_key)
             if state is None:
                 return {
                     "symbol": symbol_key,
+                    "source": source_key,
                     "tracked": False,
                     "refreshing": False,
                     "version": None,
@@ -155,14 +170,17 @@ class LiveRefreshService:
                 }
             return self._serialize_state(state)
 
-    def get_latest_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def get_latest_snapshot(self, symbol: str, *, source: str = "NSE") -> Optional[Dict[str, Any]]:
         symbol_key = str(symbol or "NIFTY").upper()
+        source_key = str(source or "NSE").upper()
+        state_key = self._state_key(symbol_key, source_key)
         with self._lock:
-            state = self._states.get(symbol_key)
+            state = self._states.get(state_key)
             if state is None or state.latest_snapshot is None:
                 return None
             return {
                 "symbol": state.symbol,
+                "source": state.source,
                 "version": state.version,
                 "snapshot": state.latest_snapshot,
                 "live_metadata": state.latest_live_metadata,
@@ -173,7 +191,7 @@ class LiveRefreshService:
         while not self._stop_event.wait(15.0):
             with self._lock:
                 due_symbols = [
-                    state.symbol
+                    (state.symbol, state.source)
                     for state in self._states.values()
                     if state.latest_snapshot is not None
                     and state.auto_refresh_enabled
@@ -182,15 +200,16 @@ class LiveRefreshService:
                     and state.next_refresh_ts > 0
                     and time.time() >= state.next_refresh_ts
                 ]
-            for symbol in due_symbols:
+            for symbol, source in due_symbols:
                 try:
-                    self.trigger_refresh(symbol=symbol, force=True, reason="scheduled")
+                    self.trigger_refresh(symbol=symbol, source=source, force=True, reason="scheduled")
                 except Exception:
-                    self._logger.exception("LIVE_REFRESH_SCHEDULER_ERROR | symbol=%s", symbol)
+                    self._logger.exception("LIVE_REFRESH_SCHEDULER_ERROR | symbol=%s | source=%s", symbol, source)
 
-    def _refresh_symbol(self, *, symbol: str, reason: str) -> None:
+    def _refresh_symbol(self, *, symbol: str, source: str, reason: str) -> None:
+        state_key = self._state_key(symbol, source)
         with self._lock:
-            state = self._states.get(symbol)
+            state = self._states.get(state_key)
             if state is None:
                 return
             pipeline_params = dict(state.pipeline_params)
@@ -200,25 +219,26 @@ class LiveRefreshService:
 
         if reason == "scheduled" and not auto_refresh_enabled:
             with self._lock:
-                state = self._states.get(symbol)
+                state = self._states.get(state_key)
                 if state is not None:
                     state.refreshing = False
             return
 
         if reason == "scheduled" and not self._is_market_hours():
             with self._lock:
-                state = self._states.get(symbol)
+                state = self._states.get(state_key)
                 if state is not None:
                     state.refreshing = False
                     state.next_refresh_ts = self._next_market_open_ts()
             return
 
-        self._logger.info("LIVE_REFRESH | START | symbol=%s | reason=%s", symbol, reason)
+        self._logger.info("LIVE_REFRESH | START | symbol=%s | source=%s | reason=%s", symbol, source, reason)
         try:
-            live_metadata = self._engine.fetch_nse_live_data(
+            live_metadata = self._engine.fetch_live_data(
                 symbol=symbol,
                 expiries=None,
                 max_expiries=max_expiries,
+                source=source,
             )
             pipeline_request = LivePipelineRequest(
                 data_id=live_metadata["data_id"],
@@ -236,16 +256,17 @@ class LiveRefreshService:
             pipeline_result = self._engine.run_live_pipeline(pipeline_request)
             self._upsert_success(
                 symbol=symbol,
+                source=source,
                 pipeline_params=pipeline_params,
                 max_expiries=max_expiries,
                 pipeline_result=pipeline_result,
                 live_metadata=live_metadata,
             )
-            self._logger.info("LIVE_REFRESH | END | symbol=%s", symbol)
+            self._logger.info("LIVE_REFRESH | END | symbol=%s | source=%s", symbol, source)
         except Exception as exc:
-            self._logger.exception("LIVE_REFRESH | ERROR | symbol=%s", symbol)
+            self._logger.exception("LIVE_REFRESH | ERROR | symbol=%s | source=%s", symbol, source)
             with self._lock:
-                state = self._states.get(symbol)
+                state = self._states.get(state_key)
                 if state is not None:
                     state.refreshing = False
                     state.last_error = str(exc)
@@ -261,6 +282,7 @@ class LiveRefreshService:
         self,
         *,
         symbol: str,
+        source: str,
         pipeline_params: Dict[str, Any],
         max_expiries: int,
         pipeline_result: Dict[str, Any],
@@ -268,16 +290,18 @@ class LiveRefreshService:
     ) -> None:
         now = time.time()
         jitter = random.randint(10, 35)
+        state_key = self._state_key(symbol, source)
         with self._lock:
-            state = self._states.get(symbol)
+            state = self._states.get(state_key)
             if state is None:
                 state = LiveSymbolState(
                     symbol=symbol,
+                    source=source,
                     pipeline_params=dict(pipeline_params),
                     max_expiries=int(max_expiries),
                     refresh_interval_seconds=240,
                 )
-                self._states[symbol] = state
+                self._states[state_key] = state
             else:
                 state.pipeline_params = dict(pipeline_params)
                 state.max_expiries = int(max_expiries)
@@ -302,6 +326,7 @@ class LiveRefreshService:
             stale_seconds = max(0, int(time.time() - state.last_success_ts))
         return {
             "symbol": state.symbol,
+            "source": state.source,
             "tracked": True,
             "auto_refresh_enabled": state.auto_refresh_enabled,
             "refreshing": state.refreshing,

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  getKiteLoginUrl,
   checkBackendHealth,
   getRecentLogs,
   getSnapshotModule,
@@ -44,6 +45,11 @@ const INITIAL_FORM = {
   auto_refresh_enabled: true,
 };
 
+const LIVE_SOURCE_OPTIONS = [
+  { value: 'NSE', label: 'NSE' },
+  { value: 'ZERODHA', label: 'Live Feed' },
+];
+
 const NAV_ITEMS = [
   { key: 'market', label: 'Market' },
   { key: 'option_chain', label: 'Option Chain' },
@@ -64,6 +70,7 @@ export default function App() {
   const [clockValue, setClockValue] = useState(new Date());
   const [backendStatus, setBackendStatus] = useState('unknown');
   const [underlying, setUnderlying] = useState('NIFTY');
+  const [liveSource, setLiveSource] = useState('NSE');
   const [selectedExpiry, setSelectedExpiry] = useState('auto');
   const [recentLogs, setRecentLogs] = useState([]);
   const [modelSelection, setModelSelection] = useState('SABR');
@@ -209,7 +216,7 @@ export default function App() {
 
   const PROGRESS_STEPS = [
     'Connecting to backend...',
-    'Fetching live option chain from NSE...',
+    'Fetching live option chain...',
     'Building volatility surface & calibrating...',
     'Running Monte Carlo simulations...',
     'Ranking strategies & computing Greeks...',
@@ -237,7 +244,7 @@ export default function App() {
 
       setFetchProgress(PROGRESS_STEPS[2]);
       const { snapshotId, fallbackModules, liveMetadata: meta } =
-        await runLiveForSnapshot(underlying, pipelineParams, Number(form.max_expiries));
+        await runLiveForSnapshot(underlying, pipelineParams, Number(form.max_expiries), liveSource);
 
       setFetchProgress(PROGRESS_STEPS[4]);
       setLiveMetadata(meta);
@@ -262,6 +269,7 @@ export default function App() {
       setLatestLiveVersion(snapshotId);
       triggerLiveRefresh({
         symbol: underlying,
+        source: liveSource,
         max_expiries: Number(form.max_expiries),
         refresh_interval_seconds: Number(form.refresh_interval_seconds),
         auto_refresh_enabled: Boolean(form.auto_refresh_enabled),
@@ -272,7 +280,7 @@ export default function App() {
       await fetchLogsOnce();
     } catch (requestError) {
       setBackendStatus('disconnected');
-      setError(requestError.message || 'Live NSE pipeline failed.');
+      setError(requestError.message || 'Live pipeline failed.');
       setFetchProgress('');
       await fetchLogsOnce();
     } finally {
@@ -280,18 +288,34 @@ export default function App() {
     }
   };
 
+  const connectZerodha = useCallback(() => {
+    const url = getKiteLoginUrl();
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }, []);
+
+  const liveSourceLabel = String(
+    liveMetadata?.source
+    || market?.data_source
+    || liveRefreshStatus?.source
+    || liveSource
+    || 'NSE'
+  )
+    .replace(/_live$/i, '')
+    .toUpperCase();
+
   useEffect(() => {
     const symbol = String(liveMetadata?.symbol || underlying || 'NIFTY').toUpperCase();
+    const source = String(liveMetadata?.source || liveSource || 'NSE').toUpperCase();
     let cancelled = false;
 
     async function pollLiveStatus() {
       try {
-        const response = await getLiveRefreshStatus(symbol);
+        const response = await getLiveRefreshStatus(symbol, source);
         if (cancelled) return;
         const status = response?.data || null;
         setLiveRefreshStatus(status);
         if (status?.version && status.version !== latestLiveVersion && status.has_snapshot) {
-          const latestResponse = await getLatestLiveSnapshot(symbol);
+          const latestResponse = await getLatestLiveSnapshot(symbol, source);
           if (cancelled) return;
           const latest = latestResponse?.data;
           if (latest?.snapshot && latest?.version) {
@@ -316,12 +340,13 @@ export default function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [applyPipelinePayload, latestLiveVersion, liveMetadata?.symbol, underlying]);
+  }, [applyPipelinePayload, latestLiveVersion, liveMetadata?.symbol, liveMetadata?.source, liveSource, underlying]);
 
   useEffect(() => {
     if (!liveMetadata?.symbol) return;
     triggerLiveRefresh({
       symbol: String(liveMetadata.symbol).toUpperCase(),
+      source: String(liveMetadata.source || liveSource || 'NSE').toUpperCase(),
       max_expiries: Number(form.max_expiries),
       refresh_interval_seconds: Number(form.refresh_interval_seconds),
       auto_refresh_enabled: Boolean(form.auto_refresh_enabled),
@@ -348,7 +373,9 @@ export default function App() {
     form.simulation_paths,
     form.simulation_steps,
     form.strike_increment,
+    liveMetadata?.source,
     liveMetadata?.symbol,
+    liveSource,
     modelSelection,
   ]);
 
@@ -725,6 +752,20 @@ export default function App() {
             <div className="top-status-primary">
               <div className="brand top-status-brand">VOL TRADING</div>
               <label>
+                Source
+                <select
+                  value={liveSource}
+                  onChange={(event) => setLiveSource(event.target.value)}
+                  title="Choose whether to fetch delayed NSE data or Zerodha live feed."
+                >
+                  {LIVE_SOURCE_OPTIONS.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Underlying
                 <select
                   value={underlying}
@@ -732,7 +773,7 @@ export default function App() {
                     setUnderlying(event.target.value);
                     setSelectedExpiry('auto');
                   }}
-                  title="Choose the live NSE index to fetch."
+                  title="Choose the live index to fetch."
                 >
                   <option value="NIFTY">NIFTY</option>
                   <option value="BANKNIFTY">BANKNIFTY</option>
@@ -759,13 +800,24 @@ export default function App() {
                 <span>Regime</span>
                 <strong style={{ color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e' }}>{regimeLabel}</strong>
               </div>
+              {liveSource === 'ZERODHA' ? (
+                <button
+                  type="button"
+                  className="action-btn top-connect-btn"
+                  onClick={connectZerodha}
+                  disabled={loading}
+                  title="Open Zerodha login to refresh the Kite access token."
+                >
+                  Connect Zerodha
+                </button>
+              ) : null}
               <button type="button" className="action-btn accent top-fetch-btn" onClick={runLive} disabled={loading}>
                 {loading ? 'Running...' : 'Fetch Live & Analyse'}
               </button>
             </div>
 
             <div className="top-status-meta">
-              <div className="top-mini-metric"><span>Source</span><strong className="status-text-ok">NSE Live</strong></div>
+              <div className="top-mini-metric"><span>Source</span><strong className="status-text-ok">{liveSourceLabel} Live</strong></div>
               <div className="top-mini-metric" title="Background refresh status from the backend live snapshot manager.">
                 <span>Live</span>
                 <strong className={liveStatusClass}>{liveStatusLabel}</strong>
@@ -826,7 +878,7 @@ export default function App() {
           <footer className="bottom-strip">
             <div><span>Job status</span><strong>{dynamicState}</strong></div>
             <div><span>Backend</span><strong className={backendStatusClass}>{backendStatus}</strong></div>
-            <div><span>Data</span><strong className={calibrationStatusClass}>{liveMetadata ? `NSE ${liveMetadata.symbol}` : 'pending'}</strong></div>
+            <div><span>Data</span><strong className={calibrationStatusClass}>{liveMetadata ? `${liveSourceLabel} ${liveMetadata.symbol}` : 'pending'}</strong></div>
             <div><span>Records</span><strong>{liveMetadata ? liveMetadata.quality_report?.total_cleaned ?? '-' : (market?.ingestion?.record_count ?? '-')}</strong></div>
             <div><span>Snapshot</span><strong>{activeSnapshotId || '-'}</strong></div>
           </footer>

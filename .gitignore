@@ -34,3 +34,13 @@ data/*.db
 *.egg-info/
 backend.log
 frontend.log
+.env
+.env.local
+.env.*
+!.env.example
+!.env.local.example
+backend/.env
+backend/.env.local
+backend/.env.*
+!backend/.env.example
+!backend/.env.local.example

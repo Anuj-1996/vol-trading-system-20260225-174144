@@ -359,6 +359,13 @@ textarea {
   font-size: 0.72rem;
 }
 
+.top-connect-btn {
+  min-height: 100%;
+  padding: 6px 8px;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
 .content-area {
   padding: 10px;
   overflow: auto;

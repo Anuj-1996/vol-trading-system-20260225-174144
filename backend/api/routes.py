@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from ..config import CONFIG
 from ..exceptions import CalibrationError, DataIngestionError, EngineError, SimulationError, StrategyError
@@ -14,6 +14,7 @@ from ..logger import get_logger
 from ..services.engine_service import LivePipelineRequest, PipelineRequest, StrategyEngineService
 from ..services.job_service import AsyncJobService
 from ..services.live_refresh_service import LiveRefreshService
+from ..services.kite_auth_service import KiteAuthService
 from ..simulation.dynamic_hedge import HedgeMode
 from ..ai.orchestrator_agent import OrchestratorAgent
 from ..ai.strategy_picker import StrategyPickerAgent
@@ -56,6 +57,7 @@ class DynamicPipelinePayload(StaticPipelinePayload):
 
 class LiveFetchPayload(BaseModel):
     symbol: str = Field(default="NIFTY", description="Index symbol: NIFTY or BANKNIFTY")
+    source: str = Field(default="NSE", description="Live market data source: NSE or ZERODHA")
     expiries: Optional[List[str]] = Field(
         default=None,
         description='List of expiry date strings, or null/["all"] for all',
@@ -66,6 +68,11 @@ class LiveFetchPayload(BaseModel):
         le=20,
         description="Maximum number of near-term expiries to fetch (default 5)",
     )
+
+
+class LiveSourceComparePayload(BaseModel):
+    symbol: str = Field(default="NIFTY", description="Index symbol to compare across sources")
+    max_expiries: int = Field(default=5, ge=1, le=20)
 
 
 class LiveStaticPipelinePayload(BaseModel):
@@ -84,6 +91,7 @@ class LiveStaticPipelinePayload(BaseModel):
 
 class LiveRefreshPayload(BaseModel):
     symbol: str = Field(default="NIFTY", description="Index symbol: NIFTY or BANKNIFTY")
+    source: str = Field(default="NSE", description="Live market data source: NSE or ZERODHA")
     max_expiries: int = Field(default=5, ge=1, le=20)
     refresh_interval_seconds: int = Field(default=240, ge=120, le=1800)
     auto_refresh_enabled: bool = True
@@ -169,6 +177,7 @@ _logger = get_logger("APIRouter")
 _engine = StrategyEngineService()
 _jobs = AsyncJobService()
 _live_refresh = LiveRefreshService(_engine)
+_kite_auth = KiteAuthService()
 _orchestrator = OrchestratorAgent()
 _strategy_picker = StrategyPickerAgent()
 _positioning = PositioningService()
@@ -217,6 +226,51 @@ def calculate_monte_carlo_variant(payload: MonteCarloVariantPayload) -> dict:
 @router.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@router.get("/auth/kite/login")
+def kite_login() -> RedirectResponse:
+    _logger.info("START | kite_login")
+    try:
+        return RedirectResponse(url=_kite_auth.build_login_url(), status_code=307)
+    except DataIngestionError as exc:
+        _logger.exception("ERROR | kite_login")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _logger.exception("ERROR | kite_login")
+        raise HTTPException(status_code=500, detail=f"Unable to start Kite login: {exc}") from exc
+
+
+@router.get("/auth/kite/callback")
+def kite_callback(
+    request_token: str | None = None,
+    status: str | None = None,
+) -> HTMLResponse:
+    _logger.info("START | kite_callback | status=%s", status)
+    try:
+        if status and status.lower() not in {"success", "ok"}:
+            raise HTTPException(status_code=400, detail=f"Kite login did not complete successfully: {status}")
+
+        session = _kite_auth.generate_access_token(request_token or "")
+        user_name = str(session.get("user_name") or session.get("user_id") or "user")
+        html = f"""
+        <html>
+          <body style="font-family: sans-serif; padding: 24px;">
+            <h2>Kite authentication complete</h2>
+            <p>Access token saved to <code>backend/.env.local</code> for {user_name}.</p>
+            <p>You can close this tab and restart the backend if it is already running.</p>
+          </body>
+        </html>
+        """
+        return HTMLResponse(content=html)
+    except HTTPException:
+        raise
+    except DataIngestionError as exc:
+        _logger.exception("ERROR | kite_callback")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _logger.exception("ERROR | kite_callback")
+        raise HTTPException(status_code=500, detail=f"Unable to complete Kite auth: {exc}") from exc
 
 
 @router.get("/logs/recent")
@@ -296,27 +350,46 @@ def cancel_job(job_id: str) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# NSE Live Data Endpoints
+# Live Data Endpoints
 # ──────────────────────────────────────────────────────────────────────
 
 
 @router.post("/data/fetch-live")
 def fetch_live_nse_data(payload: LiveFetchPayload) -> dict:
-    """Fetch option-chain data from NSE, clean it, and cache for analysis."""
+    """Fetch option-chain data from the configured live source and cache it for analysis."""
     _logger.info("START | fetch_live_nse_data | symbol=%s", payload.symbol)
     try:
-        result = _engine.fetch_nse_live_data(
+        result = _engine.fetch_live_data(
             symbol=payload.symbol,
             expiries=payload.expiries,
             max_expiries=payload.max_expiries,
+            source=payload.source,
         )
         _logger.info("END | fetch_live_nse_data | data_id=%s", result["data_id"])
         return {"status": "ok", "data": result}
     except DataIngestionError as exc:
         _logger.exception("ERROR | fetch_live_nse_data")
-        raise HTTPException(status_code=502, detail=f"NSE fetch failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Live fetch failed: {exc}") from exc
     except Exception as exc:
         _logger.exception("ERROR | fetch_live_nse_data")
+        raise HTTPException(status_code=500, detail=f"Internal error: {exc}") from exc
+
+
+@router.post("/data/compare-sources")
+def compare_live_sources(payload: LiveSourceComparePayload) -> dict:
+    _logger.info("START | compare_live_sources | symbol=%s", payload.symbol)
+    try:
+        result = _engine.compare_live_sources(
+            symbol=payload.symbol,
+            max_expiries=payload.max_expiries,
+        )
+        _logger.info("END | compare_live_sources | shared=%s", result["shared_strike_count"])
+        return {"status": "ok", "data": result}
+    except DataIngestionError as exc:
+        _logger.exception("ERROR | compare_live_sources")
+        raise HTTPException(status_code=502, detail=f"Live source comparison failed: {exc}") from exc
+    except Exception as exc:
+        _logger.exception("ERROR | compare_live_sources")
         raise HTTPException(status_code=500, detail=f"Internal error: {exc}") from exc
 
 
@@ -343,12 +416,12 @@ def get_nse_expiries(symbol: str = "NIFTY") -> dict:
 
 @router.post("/pipeline/live-static")
 def run_live_static_pipeline(payload: LiveStaticPipelinePayload) -> dict:
-    """Run the full static analysis pipeline on cached live NSE data."""
+    """Run the full static analysis pipeline on cached live data."""
     _logger.info("START | run_live_static_pipeline | data_id=%s", payload.data_id)
     try:
         request = LivePipelineRequest(**payload.model_dump())
         response = _engine.run_live_pipeline(request=request)
-        cached = _engine.get_cached_nse_data(payload.data_id) or {}
+        cached = _engine.get_cached_live_data(payload.data_id) or {}
         _live_refresh.seed_from_manual_pipeline(
             data_id=payload.data_id,
             pipeline_params=payload.model_dump(),
@@ -374,7 +447,8 @@ def trigger_live_refresh(payload: LiveRefreshPayload) -> dict:
     try:
         status = _live_refresh.trigger_refresh(
             symbol=payload.symbol,
-            pipeline_params=payload.model_dump(exclude={"symbol", "max_expiries", "refresh_interval_seconds", "auto_refresh_enabled", "force"}),
+            source=payload.source,
+            pipeline_params=payload.model_dump(exclude={"symbol", "source", "max_expiries", "refresh_interval_seconds", "auto_refresh_enabled", "force"}),
             max_expiries=payload.max_expiries,
             refresh_interval_seconds=payload.refresh_interval_seconds,
             auto_refresh_enabled=payload.auto_refresh_enabled,
@@ -388,22 +462,22 @@ def trigger_live_refresh(payload: LiveRefreshPayload) -> dict:
 
 
 @router.get("/live/status")
-def get_live_refresh_status(symbol: str = "NIFTY") -> dict:
-    _logger.info("START | get_live_refresh_status | symbol=%s", symbol)
+def get_live_refresh_status(symbol: str = "NIFTY", source: str = "NSE") -> dict:
+    _logger.info("START | get_live_refresh_status | symbol=%s | source=%s", symbol, source)
     try:
-        return {"status": "ok", "data": _live_refresh.get_status(symbol)}
+        return {"status": "ok", "data": _live_refresh.get_status(symbol, source=source)}
     except Exception as exc:
         _logger.exception("ERROR | get_live_refresh_status")
         raise HTTPException(status_code=500, detail=f"Unable to read live status: {exc}") from exc
 
 
 @router.get("/live/latest")
-def get_live_latest_snapshot(symbol: str = "NIFTY") -> dict:
-    _logger.info("START | get_live_latest_snapshot | symbol=%s", symbol)
+def get_live_latest_snapshot(symbol: str = "NIFTY", source: str = "NSE") -> dict:
+    _logger.info("START | get_live_latest_snapshot | symbol=%s | source=%s", symbol, source)
     try:
-        latest = _live_refresh.get_latest_snapshot(symbol)
+        latest = _live_refresh.get_latest_snapshot(symbol, source=source)
         if latest is None:
-            raise HTTPException(status_code=404, detail=f"No cached live snapshot for {symbol}")
+            raise HTTPException(status_code=404, detail=f"No cached live snapshot for {symbol} ({source})")
         return {"status": "ok", "data": latest}
     except HTTPException:
         raise

@@ -10,6 +10,13 @@ from .models import OptionChainRawRecord
 
 
 class OptionChainRepository:
+    _EXTRA_COLUMNS = (
+        ("call_oi", "REAL NOT NULL DEFAULT 0"),
+        ("put_oi", "REAL NOT NULL DEFAULT 0"),
+        ("call_volume", "REAL NOT NULL DEFAULT 0"),
+        ("put_volume", "REAL NOT NULL DEFAULT 0"),
+    )
+
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._logger = get_logger(self.__class__.__name__)
@@ -35,11 +42,22 @@ class OptionChainRepository:
             call_ask REAL NOT NULL,
             put_bid REAL NOT NULL,
             put_ask REAL NOT NULL,
+            call_oi REAL NOT NULL DEFAULT 0,
+            put_oi REAL NOT NULL DEFAULT 0,
+            call_volume REAL NOT NULL DEFAULT 0,
+            put_volume REAL NOT NULL DEFAULT 0,
             PRIMARY KEY (trade_date, expiry, strike)
         );
         """
         with self._connect() as connection:
             connection.execute(ddl)
+            existing_columns = {
+                str(row[1]).lower()
+                for row in connection.execute("PRAGMA table_info(option_chain_raw);").fetchall()
+            }
+            for column_name, column_ddl in self._EXTRA_COLUMNS:
+                if column_name not in existing_columns:
+                    connection.execute(f"ALTER TABLE option_chain_raw ADD COLUMN {column_name} {column_ddl}")
             connection.commit()
         self._logger.info("END | ensure_schema")
 
@@ -60,6 +78,10 @@ class OptionChainRepository:
                 item.call_ask,
                 item.put_bid,
                 item.put_ask,
+                item.call_oi,
+                item.put_oi,
+                item.call_volume,
+                item.put_volume,
             )
             for item in records
         ]
@@ -71,8 +93,9 @@ class OptionChainRepository:
         dml = """
         INSERT INTO option_chain_raw (
             trade_date, expiry, strike, call_price, put_price, call_iv, put_iv,
-            volume, open_interest, call_bid, call_ask, put_bid, put_ask
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            volume, open_interest, call_bid, call_ask, put_bid, put_ask,
+            call_oi, put_oi, call_volume, put_volume
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(trade_date, expiry, strike) DO UPDATE SET
             call_price=excluded.call_price,
             put_price=excluded.put_price,
@@ -83,7 +106,11 @@ class OptionChainRepository:
             call_bid=excluded.call_bid,
             call_ask=excluded.call_ask,
             put_bid=excluded.put_bid,
-            put_ask=excluded.put_ask;
+            put_ask=excluded.put_ask,
+            call_oi=excluded.call_oi,
+            put_oi=excluded.put_oi,
+            call_volume=excluded.call_volume,
+            put_volume=excluded.put_volume;
         """
         with self._connect() as connection:
             connection.executemany(dml, payload)

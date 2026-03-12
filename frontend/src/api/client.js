@@ -1,6 +1,10 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1';
 const snapshotCache = new Map();
 
+export function getKiteLoginUrl() {
+  return `${API_BASE}/auth/kite/login`;
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -444,13 +448,13 @@ export async function getRecentLogs(lineCount = 120) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NSE Live Data
+// Live Data
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function fetchLiveNSEData(symbol = 'NIFTY', expiries = null, maxExpiries = 5) {
+export async function fetchLiveNSEData(symbol = 'NIFTY', expiries = null, maxExpiries = 5, source = 'NSE') {
   return request('/data/fetch-live', {
     method: 'POST',
-    body: JSON.stringify({ symbol, expiries, max_expiries: maxExpiries }),
+    body: JSON.stringify({ symbol, source, expiries, max_expiries: maxExpiries }),
   });
 }
 
@@ -498,18 +502,18 @@ export async function triggerLiveRefresh(payload) {
   });
 }
 
-export async function getLiveRefreshStatus(symbol = 'NIFTY') {
-  return request(`/live/status?symbol=${encodeURIComponent(symbol)}`);
+export async function getLiveRefreshStatus(symbol = 'NIFTY', source = 'NSE') {
+  return request(`/live/status?symbol=${encodeURIComponent(symbol)}&source=${encodeURIComponent(source)}`);
 }
 
-export async function getLatestLiveSnapshot(symbol = 'NIFTY') {
-  return request(`/live/latest?symbol=${encodeURIComponent(symbol)}`);
+export async function getLatestLiveSnapshot(symbol = 'NIFTY', source = 'NSE') {
+  return request(`/live/latest?symbol=${encodeURIComponent(symbol)}&source=${encodeURIComponent(source)}`);
 }
 
-export async function runLiveForSnapshot(symbol = 'NIFTY', pipelineParams = {}, maxExpiries = 5) {
-  // Step 1: Fetch live data from NSE
-  const fetchResponse = await fetchLiveNSEData(symbol, null, maxExpiries);
-  const { data_id, spot, quality_report, expiry_dates } = fetchResponse.data;
+export async function runLiveForSnapshot(symbol = 'NIFTY', pipelineParams = {}, maxExpiries = 5, source = 'NSE') {
+  // Step 1: Fetch live data from the configured backend source
+  const fetchResponse = await fetchLiveNSEData(symbol, null, maxExpiries, source);
+  const { data_id, spot, quality_report, expiry_dates, source: liveSource } = fetchResponse.data;
 
   // Step 2: Run the pipeline on the cached live data
   const pipelinePayload = {
@@ -535,7 +539,7 @@ export async function runLiveForSnapshot(symbol = 'NIFTY', pipelineParams = {}, 
     snapshotId,
     backendSnapshot: false,
     fallbackModules: modules,
-    liveMetadata: { data_id, spot, quality_report, expiry_dates, symbol },
+    liveMetadata: { data_id, spot, quality_report, expiry_dates, symbol, source: liveSource || source || 'NSE' },
   };
 }
 

@@ -1,8 +1,28 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Tuple
+
+
+def _load_local_env_files() -> None:
+    for candidate in (Path(".env.local"), Path("backend/.env.local")):
+        if not candidate.exists():
+            continue
+        for raw_line in candidate.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+_load_local_env_files()
+DATA_SOURCE = os.getenv("DATA_SOURCE", "NSE").upper()
 
 
 @dataclass(frozen=True)
@@ -18,6 +38,27 @@ class DataConfig:
     data_root: Path = Path("data")
     file_pattern: str = "NIFTY_*_option_chain_*.csv"
     strike_increment_allowed: Tuple[int, int] = (50, 100)
+    source: str = DATA_SOURCE
+
+
+@dataclass(frozen=True)
+class ZerodhaConfig:
+    api_key: str = field(default_factory=lambda: os.getenv("KITE_API_KEY", ""))
+    api_secret: str = field(default_factory=lambda: os.getenv("KITE_API_SECRET", ""))
+    access_token: str = field(default_factory=lambda: os.getenv("KITE_ACCESS_TOKEN", ""))
+    request_token: str = field(default_factory=lambda: os.getenv("KITE_REQUEST_TOKEN", ""))
+    redirect_url: str = field(
+        default_factory=lambda: os.getenv("KITE_REDIRECT_URL", "http://127.0.0.1:8000/api/v1/auth/kite/callback")
+    )
+    risk_free_rate: float = field(default_factory=lambda: float(os.getenv("KITE_RISK_FREE_RATE", "0.065")))
+    underlying_symbol: str = field(default_factory=lambda: os.getenv("KITE_UNDERLYING_SYMBOL", "NSE:NIFTY 50"))
+    underlying_name: str = field(default_factory=lambda: os.getenv("KITE_UNDERLYING_NAME", "NIFTY 50"))
+    snapshot_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("KITE_SNAPSHOT_TIMEOUT_SECONDS", "8.0"))
+    )
+    max_instruments_per_subscription: int = field(
+        default_factory=lambda: int(os.getenv("KITE_MAX_INSTRUMENTS_PER_SUBSCRIPTION", "3000"))
+    )
 
 
 @dataclass(frozen=True)
@@ -72,6 +113,7 @@ class StrategyConfig:
 class AppConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     data: DataConfig = field(default_factory=DataConfig)
+    zerodha: ZerodhaConfig = field(default_factory=ZerodhaConfig)
     liquidity: LiquidityConfig = field(default_factory=LiquidityConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)

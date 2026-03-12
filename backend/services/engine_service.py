@@ -4,6 +4,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,6 +15,9 @@ from ..calibration.joint_calibrator import JointHestonCalibrator
 from ..calibration.heston_fft import HestonFFTPricer
 from ..calibration.sabr import SABRSurfaceCalibrator
 from ..config import CONFIG
+from ..data.kite_chain_builder import KiteOptionChainBuilder
+from ..data.kite_client import KiteMarketDataClient
+from ..data.kite_option_universe import KiteOptionUniverseBuilder
 from ..data.ingestion import OptionChainIngestionService
 from ..data.models import OptionChainRawRecord
 from ..data.nse_client import NSEClient
@@ -23,7 +27,7 @@ from ..data.repository import OptionChainRepository
 from ..evaluation.fragility_engine import FragilityEngine
 from ..evaluation.ranking_engine import RankedStrategy, RankingEngine
 from ..evaluation.static_evaluator import StaticEvaluationEngine
-from ..exceptions import CalibrationError
+from ..exceptions import CalibrationError, DataIngestionError
 from ..logger import get_logger
 from ..regime.regime_classifier import RegimeClassifier
 from ..simulation.dynamic_hedge import DynamicHedgingEngine, HedgeMode
@@ -52,7 +56,7 @@ class PipelineRequest:
 
 @dataclass(frozen=True)
 class LivePipelineRequest:
-    """Request for running the pipeline on live NSE data (no file_path / spot needed)."""
+    """Request for running the pipeline on cached live data."""
     data_id: str
     db_path: str = "backend/vol_engine.db"
     risk_free_rate: float = 0.065
@@ -66,7 +70,7 @@ class LivePipelineRequest:
     model_selection: str = "SABR"
 
 
-# In-memory cache for fetched NSE data (data_id -> FetchResult + cleaned records)
+# In-memory cache for fetched live data (data_id -> source payload + cleaned records)
 _live_data_cache: Dict[str, Dict[str, Any]] = {}
 _mc_variant_cache: Dict[tuple[str, float, float, int, int], Dict[str, Any]] = {}
 _cache_lock = threading.Lock()
@@ -105,10 +109,29 @@ class StrategyEngineService:
         self._nse_client = NSEClient()
         self._nse_fetcher = NSEOptionChainFetcher(client=self._nse_client)
         self._nse_cleaner = NSEDataCleaner()
+        self._kite_client = KiteMarketDataClient(
+            api_key=CONFIG.zerodha.api_key,
+            access_token=CONFIG.zerodha.access_token,
+            api_secret=CONFIG.zerodha.api_secret,
+            request_token=CONFIG.zerodha.request_token,
+        )
+        self._kite_universe = KiteOptionUniverseBuilder(underlying_symbol=CONFIG.zerodha.underlying_symbol)
 
     # ------------------------------------------------------------------
-    # NSE Live Data: Fetch + Cache
+    # Live Data: Fetch + Cache
     # ------------------------------------------------------------------
+
+    def fetch_live_data(
+        self,
+        symbol: str = "NIFTY",
+        expiries: Optional[List[str]] = None,
+        max_expiries: int = 5,
+        source: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        resolved_source = str(source or CONFIG.data.source or "NSE").upper()
+        if resolved_source == "ZERODHA":
+            return self.fetch_zerodha_live_data(symbol=symbol, max_expiries=max_expiries)
+        return self.fetch_nse_live_data(symbol=symbol, expiries=expiries, max_expiries=max_expiries)
 
     def fetch_nse_live_data(
         self,
@@ -151,19 +174,14 @@ class StrategyEngineService:
             spot=fetch_result.spot,
         )
 
-        # Generate cache key
-        import time
-        data_id = f"nse_{symbol.lower()}_{int(time.time())}"
-
-        # Cache for pipeline use
-        with _cache_lock:
-            _live_data_cache[data_id] = {
-                "fetch_result": fetch_result,
-                "cleaned_records": clean_result.cleaned_records,
-                "quality_report": clean_result.quality_report,
-                "spot": fetch_result.spot,
-                "symbol": symbol,
-            }
+        data_id = self._cache_live_data(
+            prefix="nse",
+            symbol=symbol,
+            fetch_result=fetch_result,
+            cleaned_records=clean_result.cleaned_records,
+            quality_report=clean_result.quality_report,
+            source="NSE",
+        )
 
         self._logger.info(
             "FETCH_NSE_LIVE | CACHED | data_id=%s | records=%d | spot=%.2f",
@@ -181,12 +199,197 @@ class StrategyEngineService:
             "raw_entry_count": fetch_result.raw_entry_count,
             "quality_report": clean_result.quality_report,
             "symbol": symbol,
+            "source": "NSE",
         }
 
     def get_cached_nse_data(self, data_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve cached NSE data by data_id. Returns None if not found."""
+        """Backward-compatible cache lookup for live data by data_id."""
         with _cache_lock:
             return _live_data_cache.get(data_id)
+
+    def get_cached_live_data(self, data_id: str) -> Optional[Dict[str, Any]]:
+        with _cache_lock:
+            return _live_data_cache.get(data_id)
+
+    def fetch_zerodha_live_data(
+        self,
+        symbol: str = "NIFTY",
+        max_expiries: int = 5,
+    ) -> Dict[str, Any]:
+        self._logger.info("FETCH_ZERODHA_LIVE | symbol=%s | max_expiries=%d", symbol, max_expiries)
+
+        self._kite_client.authenticate()
+        nfo_instruments = self._kite_client.get_instruments("NFO")
+        underlying_instruments = self._kite_client.get_instruments("NSE")
+        universe = self._kite_universe.build(
+            nfo_instruments=nfo_instruments,
+            underlying_instruments=underlying_instruments,
+            symbol=symbol,
+            max_expiries=max_expiries,
+        )
+        builder = KiteOptionChainBuilder(
+            universe=universe,
+            risk_free_rate=CONFIG.zerodha.risk_free_rate,
+        )
+
+        initial_spot = self._kite_client.get_ltp(universe.underlying_symbol)
+        if initial_spot > 0:
+            builder.update_underlying_price(initial_spot)
+
+        tokens = universe.tokens_for_expiries(sorted(universe.expiry_map))
+        if len(tokens) > CONFIG.zerodha.max_instruments_per_subscription:
+            raise DataIngestionError(
+                message="Configured Zerodha subscription limit is too low for the selected option universe",
+                context={
+                    "required_tokens": len(tokens),
+                    "configured_limit": CONFIG.zerodha.max_instruments_per_subscription,
+                },
+            )
+        snapshot_ready = threading.Event()
+        stream_error: Dict[str, Exception] = {}
+        latest_records: List[OptionChainRawRecord] = []
+
+        def _on_ticks(ticks: List[Dict[str, Any]]) -> None:
+            nonlocal latest_records
+            records = builder.apply_ticks(ticks=ticks)
+            if records:
+                latest_records = records
+                snapshot_ready.set()
+
+        def _on_error(exc: Exception) -> None:
+            stream_error["error"] = exc
+            snapshot_ready.set()
+
+        try:
+            self._kite_client.connect(
+                tokens=tokens,
+                on_ticks=_on_ticks,
+                on_error=_on_error,
+            )
+            snapshot_ready.wait(timeout=CONFIG.zerodha.snapshot_timeout_seconds)
+        finally:
+            self._kite_client.close()
+
+        if "error" in stream_error:
+            raise DataIngestionError(
+                message="Zerodha streaming snapshot failed",
+                context={"symbol": symbol, "error": str(stream_error["error"])},
+            )
+        if not latest_records:
+            raise DataIngestionError(
+                message="Timed out waiting for Zerodha snapshot",
+                context={
+                    "symbol": symbol,
+                    "timeout_seconds": CONFIG.zerodha.snapshot_timeout_seconds,
+                    "subscribed_tokens": len(tokens),
+                },
+            )
+
+        timestamp = datetime.now().isoformat()
+        fetch_result = FetchResult(
+            records=latest_records,
+            spot=builder.underlying_price or initial_spot,
+            timestamp=timestamp,
+            expiry_dates=[expiry.isoformat() for expiry in sorted(universe.expiry_map)],
+            symbol=symbol,
+            raw_entry_count=len(latest_records),
+        )
+        clean_result = self._nse_cleaner.clean(
+            records=latest_records,
+            spot=fetch_result.spot,
+        )
+        data_id = self._cache_live_data(
+            prefix="zerodha",
+            symbol=symbol,
+            fetch_result=fetch_result,
+            cleaned_records=clean_result.cleaned_records,
+            quality_report={
+                **clean_result.quality_report,
+                "source": "ZERODHA",
+                "strike_count": float(len({record.strike for record in clean_result.cleaned_records})),
+                "expiry_count": float(len({record.expiry for record in clean_result.cleaned_records})),
+            },
+            source="ZERODHA",
+        )
+        return {
+            "data_id": data_id,
+            "spot": fetch_result.spot,
+            "timestamp": fetch_result.timestamp,
+            "expiry_dates": fetch_result.expiry_dates,
+            "record_count": len(clean_result.cleaned_records),
+            "raw_entry_count": fetch_result.raw_entry_count,
+            "quality_report": _live_data_cache[data_id]["quality_report"],
+            "symbol": symbol,
+            "source": "ZERODHA",
+        }
+
+    def compare_live_sources(
+        self,
+        *,
+        symbol: str = "NIFTY",
+        max_expiries: int = 5,
+    ) -> Dict[str, Any]:
+        nse_result = self.fetch_nse_live_data(symbol=symbol, expiries=None, max_expiries=max_expiries)
+        zerodha_result = self.fetch_zerodha_live_data(symbol=symbol, max_expiries=max_expiries)
+
+        nse_records = self.get_cached_live_data(nse_result["data_id"]) or {}
+        zerodha_records = self.get_cached_live_data(zerodha_result["data_id"]) or {}
+
+        nse_by_key = {
+            (record.expiry.isoformat(), record.strike): record
+            for record in nse_records.get("cleaned_records", [])
+        }
+        zerodha_by_key = {
+            (record.expiry.isoformat(), record.strike): record
+            for record in zerodha_records.get("cleaned_records", [])
+        }
+        shared_keys = sorted(set(nse_by_key) & set(zerodha_by_key))
+
+        comparisons = []
+        for expiry, strike in shared_keys:
+            nse_record = nse_by_key[(expiry, strike)]
+            zerodha_record = zerodha_by_key[(expiry, strike)]
+            comparisons.append(
+                {
+                    "expiry": expiry,
+                    "strike": strike,
+                    "call_price_diff": zerodha_record.call_price - nse_record.call_price,
+                    "put_price_diff": zerodha_record.put_price - nse_record.put_price,
+                    "open_interest_diff": zerodha_record.open_interest - nse_record.open_interest,
+                }
+            )
+
+        return {
+            "symbol": symbol,
+            "nse_data_id": nse_result["data_id"],
+            "zerodha_data_id": zerodha_result["data_id"],
+            "nse_strike_count": len(nse_by_key),
+            "zerodha_strike_count": len(zerodha_by_key),
+            "shared_strike_count": len(shared_keys),
+            "comparisons": comparisons[:250],
+        }
+
+    def _cache_live_data(
+        self,
+        *,
+        prefix: str,
+        symbol: str,
+        fetch_result: FetchResult,
+        cleaned_records: List[OptionChainRawRecord],
+        quality_report: Dict[str, Any],
+        source: str,
+    ) -> str:
+        data_id = f"{prefix}_{symbol.lower()}_{int(time.time())}"
+        with _cache_lock:
+            _live_data_cache[data_id] = {
+                "fetch_result": fetch_result,
+                "cleaned_records": cleaned_records,
+                "quality_report": quality_report,
+                "spot": fetch_result.spot,
+                "symbol": symbol,
+                "source": source,
+            }
+        return data_id
 
     def build_monte_carlo_surface_variant(
         self,
@@ -202,17 +405,17 @@ class StrategyEngineService:
         if cached_variant is not None:
             return cached_variant
 
-        cached = self.get_cached_nse_data(data_id)
+        cached = self.get_cached_live_data(data_id)
         if cached is None:
             raise ValueError(
-                f"No cached NSE data for data_id={data_id}. "
+                f"No cached live data for data_id={data_id}. "
                 "Fetch data first via /api/v1/data/fetch-live."
             )
 
         raw_records: List[OptionChainRawRecord] = cached["cleaned_records"]
         spot: float = cached["spot"]
         if not raw_records:
-            raise ValueError("Cached NSE data contains no records after cleaning.")
+            raise ValueError("Cached live data contains no records after cleaning.")
 
         filtered = self._liquidity_filter.filter_records(records=raw_records, spot=spot)
         surface = self._surface_builder.build_surface(records=filtered)
@@ -275,23 +478,23 @@ class StrategyEngineService:
         return result
 
     # ------------------------------------------------------------------
-    # Live Pipeline: Run analysis on cached NSE data
+    # Live Pipeline: Run analysis on cached live data
     # ------------------------------------------------------------------
 
     def run_live_pipeline(self, request: LivePipelineRequest) -> Dict[str, Any]:
         """
-        Run the full static pipeline on cached live NSE data.
+        Run the full static pipeline on cached live data.
 
         This is identical to run_static_pipeline but uses pre-fetched
-        NSE data instead of a CSV file. Spot comes from the NSE feed.
+        live market data instead of a CSV file. Spot comes from the feed.
         """
         self._logger.info("START | run_live_pipeline | data_id=%s", request.data_id)
         pipeline_start = time.perf_counter()
 
-        cached = self.get_cached_nse_data(request.data_id)
+        cached = self.get_cached_live_data(request.data_id)
         if cached is None:
             raise ValueError(
-                f"No cached NSE data for data_id={request.data_id}. "
+                f"No cached live data for data_id={request.data_id}. "
                 "Fetch data first via /api/v1/data/fetch-live."
             )
 
@@ -300,7 +503,7 @@ class StrategyEngineService:
         symbol: str = cached.get("symbol", "NIFTY")
 
         if not raw_records:
-            raise ValueError("Cached NSE data contains no records after cleaning.")
+            raise ValueError("Cached live data contains no records after cleaning.")
 
         self._logger.info(
             "LIVE_PIPELINE | data_id=%s | records=%d | spot=%.2f",
@@ -491,8 +694,8 @@ class StrategyEngineService:
                 "price_history": history_metrics["price_history"],
                 "vol_model_forecasts": history_metrics["vol_model_forecasts"],
                 "mmi_yf": history_metrics.get("mmi_yf"),
-                "data_source": "nse_live",
-                "nse_timestamp": cached["fetch_result"].timestamp,
+                "data_source": str(cached.get("source", "NSE")).lower() + "_live",
+                "live_timestamp": cached["fetch_result"].timestamp,
             },
             "surface": {
                 "strike_grid": surface.strike_grid.tolist(),
@@ -2084,9 +2287,9 @@ class StrategyEngineService:
 
         # Resolve market data from cache
         if data_id:
-            cached = self.get_cached_nse_data(data_id)
+            cached = self.get_cached_live_data(data_id)
             if cached is None:
-                raise ValueError(f"No cached NSE data for data_id={data_id}. Run pipeline first.")
+                raise ValueError(f"No cached live data for data_id={data_id}. Run pipeline first.")
             raw_records = cached["cleaned_records"]
             spot = cached["spot"]
             symbol = cached.get("symbol", "NIFTY")
@@ -2094,7 +2297,7 @@ class StrategyEngineService:
             raise ValueError("data_id is required for recalibration.")
 
         if not raw_records:
-            raise ValueError("Cached NSE data contains no records.")
+            raise ValueError("Cached live data contains no records.")
 
         # Rebuild surface from cached records
         filtered = self._liquidity_filter.filter_records(records=raw_records, spot=spot)
@@ -2258,7 +2461,7 @@ class StrategyEngineService:
                 "vvix_equivalent": history_metrics["vvix_equivalent"],
                 "vol_model_forecasts": history_metrics["vol_model_forecasts"],
                 "mmi_yf": history_metrics.get("mmi_yf"),
-                "data_source": "nse_live",
+                "data_source": str(cached.get("source", "NSE")).lower() + "_live",
             },
             "surface": {
                 "strike_grid": surface.strike_grid.tolist(),

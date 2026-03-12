@@ -483,6 +483,7 @@ export default function App() {
           underlying={underlying}
           market={market}
           surface={surface}
+          strikeIncrement={form.strike_increment}
           selectedExpiryIndex={selectedExpiryIndex}
           onExpiryIndexChange={(nextIndex) => setSelectedExpiry(String(nextIndex))}
         />

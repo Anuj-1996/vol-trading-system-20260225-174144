@@ -179,6 +179,7 @@ export default function OptionChainPage({
   underlying = 'NIFTY',
   market = {},
   surface = {},
+  strikeIncrement = 50,
   selectedExpiryIndex = 0,
   onExpiryIndexChange,
 }) {
@@ -506,13 +507,30 @@ export default function OptionChainPage({
   ]);
 
   const visibleRows = useMemo(() => {
+    const actualStep = strikeGrid.length > 1 ? Math.abs(Number(strikeGrid[1]) - Number(strikeGrid[0])) : 50;
+    const requestedStep = Number(strikeIncrement);
+    const rowSkip = Number.isFinite(requestedStep) && requestedStep > actualStep
+      ? Math.max(1, Math.round(requestedStep / actualStep))
+      : 1;
+
     const aroundAtm = rows.filter((_, index) => Math.abs(index - atmIndex) <= strikeWindow);
-    if (rowMode === 'all') return rows;
-    if (rowMode === 'otm_only') {
-      return aroundAtm.filter((row) => (row.strike >= spot && row.putValue > 0) || (row.strike <= spot && row.callValue > 0));
+    const baseRows = rowMode === 'all'
+      ? rows
+      : rowMode === 'otm_only'
+        ? aroundAtm.filter((row) => (row.strike >= spot && row.putValue > 0) || (row.strike <= spot && row.callValue > 0))
+        : aroundAtm;
+
+    if (rowSkip <= 1) {
+      return baseRows;
     }
-    return aroundAtm;
-  }, [rows, atmIndex, strikeWindow, rowMode, spot]);
+
+    return baseRows.filter((row, index) => {
+      if (row.isAtm) return true;
+      const fullIndex = rows.findIndex((candidate) => candidate.strike === row.strike);
+      if (fullIndex < 0) return index % rowSkip === 0;
+      return Math.abs(fullIndex - atmIndex) % rowSkip === 0;
+    });
+  }, [rows, atmIndex, strikeWindow, rowMode, spot, strikeGrid, strikeIncrement]);
 
   const activeStrike = focusedStrike ?? (detailCardEnabled ? hoveredStrike : null);
   const activeRow = useMemo(

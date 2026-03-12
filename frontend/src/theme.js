@@ -8,7 +8,7 @@ export const THEME_OPTIONS = [
   { key: 'true-dark', label: 'True Dark' },
 ];
 
-export const ThemeContext = React.createContext('light-dark');
+export const ThemeContext = React.createContext('true-dark');
 
 export const PLOT_THEME_TOKENS = {
   'light-dark': {

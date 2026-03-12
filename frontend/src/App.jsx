@@ -22,6 +22,10 @@ import SurfacePage from './components/pages/SurfacePage';
 import { Panel, formatNumber } from './components/pages/shared.jsx';
 import { useSnapshotStore } from './store/useSnapshotStore';
 import { ThemeContext, THEME_OPTIONS, THEME_STORAGE_KEY } from './theme';
+
+const PANEL_TITLE_COLOR_STORAGE_KEY = 'vol-trading-panel-title-color';
+const DEFAULT_PANEL_TITLE_COLOR = '#f59e0b';
+
 const INITIAL_FORM = {
   spot: 0,
   risk_free_rate: 0.065,
@@ -66,9 +70,15 @@ export default function App() {
   const [lastPipelineData, setLastPipelineData] = useState(null);
   const [themeMode, setThemeMode] = useState(() => {
     if (typeof window === 'undefined') {
-      return 'light-dark';
+      return 'true-dark';
     }
-    return window.localStorage.getItem(THEME_STORAGE_KEY) || 'light-dark';
+    return window.localStorage.getItem(THEME_STORAGE_KEY) || 'true-dark';
+  });
+  const [panelTitleColor, setPanelTitleColor] = useState(() => {
+    if (typeof window === 'undefined') {
+      return DEFAULT_PANEL_TITLE_COLOR;
+    }
+    return window.localStorage.getItem(PANEL_TITLE_COLOR_STORAGE_KEY) || DEFAULT_PANEL_TITLE_COLOR;
   });
 
   const {
@@ -102,6 +112,12 @@ export default function App() {
       window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
     }
   }, [themeMode]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(PANEL_TITLE_COLOR_STORAGE_KEY, panelTitleColor);
+    }
+  }, [panelTitleColor]);
 
   const fetchLogsOnce = async () => {
     try {
@@ -218,6 +234,49 @@ export default function App() {
 
   const renderSettingsPage = () => (
     <div className="page-settings-grid">
+      <Panel title="Theme Mode">
+        <label>
+          Dashboard theme
+          <div className="settings-theme-switcher" aria-label="Theme mode switcher">
+            {THEME_OPTIONS.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className={themeMode === option.key ? 'theme-switch-btn active' : 'theme-switch-btn'}
+                onClick={() => setThemeMode(option.key)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </label>
+      </Panel>
+      <Panel title="Title Accent">
+        <label>
+          Panel title color
+          <div className="settings-accent-row">
+            <input
+              type="color"
+              value={panelTitleColor}
+              onChange={(event) => setPanelTitleColor(event.target.value)}
+              className="settings-color-input"
+            />
+            <input
+              type="text"
+              value={panelTitleColor}
+              onChange={(event) => setPanelTitleColor(event.target.value)}
+              className="settings-color-text"
+            />
+            <button
+              type="button"
+              className="theme-switch-btn"
+              onClick={() => setPanelTitleColor(DEFAULT_PANEL_TITLE_COLOR)}
+            >
+              Reset
+            </button>
+          </div>
+        </label>
+      </Panel>
       <Panel title="Model Selection">
         <label>
           Model selection dropdown
@@ -484,7 +543,10 @@ export default function App() {
 
   return (
     <ThemeContext.Provider value={themeMode}>
-      <div className={`bbg-shell theme-${themeMode}${aiPanelOpen ? ' ai-open' : ''}`}>
+      <div
+        className={`bbg-shell theme-${themeMode}${aiPanelOpen ? ' ai-open' : ''}`}
+        style={{ '--panel-title-color': panelTitleColor }}
+      >
         <div className="bbg-main">
           <header className="top-nav-bar">
             <div className="brand">VOL TRADING</div>
@@ -500,18 +562,6 @@ export default function App() {
                 </button>
               ))}
             </nav>
-            <div className="theme-switcher" aria-label="Theme mode switcher">
-              {THEME_OPTIONS.map((option) => (
-                <button
-                  key={option.key}
-                  type="button"
-                  className={themeMode === option.key ? 'theme-switch-btn active' : 'theme-switch-btn'}
-                  onClick={() => setThemeMode(option.key)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
           </header>
 
           <header className="top-status-bar">

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -198,6 +199,7 @@ class StrategyEngineService:
         NSE data instead of a CSV file. Spot comes from the NSE feed.
         """
         self._logger.info("START | run_live_pipeline | data_id=%s", request.data_id)
+        pipeline_start = time.perf_counter()
 
         cached = self.get_cached_nse_data(request.data_id)
         if cached is None:
@@ -224,10 +226,12 @@ class StrategyEngineService:
         repository = OptionChainRepository(db_path=Path(request.db_path))
         repository.ensure_schema()
         repository.upsert_raw_records(raw_records)
+        after_persist = time.perf_counter()
 
         # From here: IDENTICAL to run_static_pipeline
         filtered = self._liquidity_filter.filter_records(records=raw_records, spot=spot)
         surface = self._surface_builder.build_surface(records=filtered)
+        after_surface = time.perf_counter()
 
         calibration_result, _, _, _ = self._calibrate_with_retries(
             surface=surface,
@@ -236,6 +240,7 @@ class StrategyEngineService:
             rate=request.risk_free_rate,
             dividend_yield=request.dividend_yield,
         )
+        after_calibration = time.perf_counter()
 
         maturity = float(np.max(surface.maturity_grid))
         simulation_result = self._monte_carlo.simulate(
@@ -247,6 +252,7 @@ class StrategyEngineService:
             time_steps=request.simulation_steps,
             full_path=False,
         )
+        after_simulation = time.perf_counter()
 
         constraints = StrategyConstraints(
             capital_limit=request.capital_limit,
@@ -260,6 +266,7 @@ class StrategyEngineService:
             spot=spot,
         )
         strategies = self._generate_strategies(constraints=constraints, strike_set=strike_set)
+        after_strategy_gen = time.perf_counter()
 
         # Build model IV surface BEFORE evaluate so we can price legs with BS
         near_T = float(np.min(surface.maturity_grid))
@@ -273,6 +280,7 @@ class StrategyEngineService:
             strike_grid=surface.strike_grid,
             params=calibration_result.parameters,
         )
+        after_model_surface = time.perf_counter()
         _strike_arr = surface.strike_grid
         _iv_row = model_iv_for_pricing[_near_idx]
 
@@ -294,6 +302,7 @@ class StrategyEngineService:
             market_mid=market_mid,
             market_bid_ask=market_bid_ask,
         )
+        after_static_eval = time.perf_counter()
 
         fragility_scores: Dict[str, float] = {}
         for metric in metrics:
@@ -308,6 +317,7 @@ class StrategyEngineService:
             fragility_scores=fragility_scores,
             regime_weights=regime.ranking_weights,
         )
+        after_ranking = time.perf_counter()
 
         model_iv_matrix = self._sanitize_model_surface_matrix(
             model_iv_matrix=model_iv_for_pricing,
@@ -321,12 +331,14 @@ class StrategyEngineService:
             dividend_yield=request.dividend_yield,
             heston_calibration_result=calibration_result,
         )
+        after_surface_variants = time.perf_counter()
         requested_surface_model = request.model_selection if request.model_selection in surface_model_variants else "Heston"
         oi_profile = self._build_open_interest_profile(
             filtered_records=filtered,
             expiry_list=surface.expiry_list,
             strike_grid=surface.strike_grid,
         )
+        after_oi_profile = time.perf_counter()
 
         atm_index = int(np.argmin(np.abs(surface.strike_grid - spot)))
         # Pick the nearest maturity that has a non-zero market IV at ATM
@@ -359,7 +371,8 @@ class StrategyEngineService:
 
         # Use symbol to determine yfinance ticker — pass symbol to _fetch_market_history_metrics
         # which will map it via _map_underlying_to_ticker (checks for NIFTY/BANKNIFTY in string)
-        history_metrics = self._fetch_market_history_metrics(symbol, atm_market_iv)
+        history_metrics = self._fetch_market_history_metrics(symbol, atm_market_iv, include_mmi=False)
+        after_history = time.perf_counter()
         rv_reference = history_metrics["rv_20d"] if history_metrics["rv_20d"] is not None else atm_model_iv
         realized_implied_spread = float(atm_market_iv - rv_reference)
         strategy_margin_lookup = {
@@ -371,6 +384,7 @@ class StrategyEngineService:
             expiry_list=surface.expiry_list,
             strike_grid=surface.strike_grid,
         )
+        after_price_matrices = time.perf_counter()
 
         response = {
             "ingestion": self._ingestion.build_ingestion_report(raw_records),
@@ -416,6 +430,22 @@ class StrategyEngineService:
             },
             "top_strategies": self._build_top_strategies(ranked, pnl_distributions, simulation_result.terminal_prices, spot, near_expiry_date, near_T, strategy_margin_lookup, market_mid, market_bid_ask),
         }
+        self._logger.info(
+            "LIVE_PIPELINE_TIMING | persist=%.2fs | surface=%.2fs | calibrate=%.2fs | simulate=%.2fs | strategy_gen=%.2fs | model_surface=%.2fs | static_eval=%.2fs | ranking=%.2fs | surface_variants=%.2fs | oi_profile=%.2fs | history=%.2fs | price_matrices=%.2fs | total=%.2fs",
+            after_persist - pipeline_start,
+            after_surface - after_persist,
+            after_calibration - after_surface,
+            after_simulation - after_calibration,
+            after_strategy_gen - after_simulation,
+            after_model_surface - after_strategy_gen,
+            after_static_eval - after_model_surface,
+            after_ranking - after_static_eval,
+            after_surface_variants - after_ranking,
+            after_oi_profile - after_surface_variants,
+            after_history - after_oi_profile,
+            after_price_matrices - after_history,
+            after_price_matrices - pipeline_start,
+        )
         self._logger.info("END | run_live_pipeline")
         return response
 
@@ -1050,8 +1080,9 @@ class StrategyEngineService:
             "models": model_series,
         }
 
-    def _fetch_market_history_metrics(self, file_path: str, atm_market_iv: float) -> Dict[str, Any]:
+    def _fetch_market_history_metrics(self, file_path: str, atm_market_iv: float, include_mmi: bool = False) -> Dict[str, Any]:
         ticker = self._map_underlying_to_ticker(file_path)
+        history_start = time.perf_counter()
         try:
             import yfinance as yf
 
@@ -1130,6 +1161,7 @@ class StrategyEngineService:
         rv_20d = trailing_realized(20)
         rv_60d = trailing_realized(60)
         vol_model_forecasts = self._fit_vol_models(log_returns=log_returns, atm_market_iv=atm_market_iv, rv_20d=rv_20d)
+        after_vol_models = time.perf_counter()
         iv_proxy_source = None
 
         # Add a proxy IV time-series using India VIX from Yahoo when available.
@@ -1215,7 +1247,16 @@ class StrategyEngineService:
             f"{iv_rank:.2f}" if iv_rank is not None else "None",
             f"{iv_percentile:.2f}" if iv_percentile is not None else "None",
         )
-        mmi_yf = self._build_mmi_from_yfinance(close, period="18mo")
+        mmi_yf = self._build_mmi_from_yfinance(close, period="18mo") if include_mmi else None
+        after_mmi = time.perf_counter()
+        self._logger.info(
+            "HISTORY_METRICS_TIMING | ticker=%s | base_history_and_vol=%.2fs | mmi=%.2fs | total=%.2fs | include_mmi=%s",
+            ticker,
+            after_vol_models - history_start,
+            after_mmi - after_vol_models,
+            after_mmi - history_start,
+            include_mmi,
+        )
 
         return {
             "ticker": ticker,

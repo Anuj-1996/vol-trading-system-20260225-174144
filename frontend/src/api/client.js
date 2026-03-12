@@ -491,6 +491,21 @@ export async function runLiveStaticPipeline(payload) {
   });
 }
 
+export async function triggerLiveRefresh(payload) {
+  return request('/live/refresh', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getLiveRefreshStatus(symbol = 'NIFTY') {
+  return request(`/live/status?symbol=${encodeURIComponent(symbol)}`);
+}
+
+export async function getLatestLiveSnapshot(symbol = 'NIFTY') {
+  return request(`/live/latest?symbol=${encodeURIComponent(symbol)}`);
+}
+
 export async function runLiveForSnapshot(symbol = 'NIFTY', pipelineParams = {}, maxExpiries = 5) {
   // Step 1: Fetch live data from NSE
   const fetchResponse = await fetchLiveNSEData(symbol, null, maxExpiries);

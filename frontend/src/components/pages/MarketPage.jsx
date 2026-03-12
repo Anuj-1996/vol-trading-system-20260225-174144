@@ -838,6 +838,52 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
               <div><span>ATM IV - 20D RV (pts)</span><strong>{spotSpreadPct !== null ? formatNumber(spotSpreadPct, 2) : '-'}</strong></div>
             </div>
           </Panel>
+          <Panel title="Volatility Summary">
+            <div className="market-summary-strip">
+              <section className="market-summary-section">
+                <h4>Realized Vol</h4>
+                <div className="kv-grid two-col market-metrics-grid">
+                  <div><span>10D RV</span><strong>{formatPct(market?.rv_10d, 2)}</strong></div>
+                  <div><span>20D RV</span><strong>{formatPct(market?.rv_20d, 2)}</strong></div>
+                  <div><span>60D RV</span><strong>{formatPct(market?.rv_60d, 2)}</strong></div>
+                  <div><span>RV Percentile</span><strong>{formatNumber(market?.rv_percentile, 2)}%</strong></div>
+                </div>
+              </section>
+              <section className="market-summary-section">
+                <h4>Regime</h4>
+                <div className="kv-grid two-col market-metrics-grid">
+                  <div><span>Trend Regime</span><strong style={{color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e'}}>{market?.regime?.label || '-'}</strong></div>
+                  <div><span>Vol Regime (IV/RV)</span><strong>{market?.regime?.volatility_regime_score != null ? Number(market.regime.volatility_regime_score).toFixed(2) + 'x' : '-'}</strong></div>
+                  <div><span>Skew (Put-Call)</span><strong>{market?.regime?.skew_regime_score != null ? (Number(market.regime.skew_regime_score) * 100).toFixed(2) + ' pts' : '-'}</strong></div>
+                  <div><span>Confidence</span><strong>{market?.regime?.confidence != null ? (Number(market.regime.confidence) * 100).toFixed(1) + '%' : '-'}</strong></div>
+                </div>
+              </section>
+              <section className="market-summary-section">
+                <h4>Vol Stats</h4>
+                <div className="kv-grid two-col market-metrics-grid">
+                  <div><span>ATM Market IV</span><strong style={{color:'#f59e0b'}}>{market?.atm_iv != null ? (Number(market.atm_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
+                  <div><span>ATM Model IV</span><strong>{market?.atm_model_iv != null ? (Number(market.atm_model_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
+                  <div><span>IV Rank</span><strong>{market?.iv_rank != null ? Number(market.iv_rank).toFixed(1) + '%' : '-'}</strong></div>
+                  <div><span>IV Percentile</span><strong>{market?.iv_percentile != null ? Number(market.iv_percentile).toFixed(1) + '%' : '-'}</strong></div>
+                  <div><span>IV-RV Spread</span><strong style={{color: Number(market?.realized_implied_spread ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{market?.realized_implied_spread != null ? (Number(market.realized_implied_spread) * 100).toFixed(2) + ' pts' : '-'}</strong></div>
+                  <div><span>VVIX Equivalent</span><strong>{market?.vvix_equivalent != null ? (Number(market.vvix_equivalent) * 100).toFixed(2) + '%' : '-'}</strong></div>
+                </div>
+              </section>
+              <section className="market-summary-section">
+                <h4>Diagnostics</h4>
+                <div className="kv-grid two-col market-metrics-grid">
+                  <div><span>Forward VRP 20D ({selectedModel})</span><strong style={{color: Number(diagnostics.forwardVrp20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.forwardVrp20 != null ? `${formatNumber(diagnostics.forwardVrp20, 2)} pts` : '-'}</strong></div>
+                  <div><span>Spot VRP (ATM IV - RV20)</span><strong style={{color: Number(diagnostics.atmRv20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.atmRv20 != null ? `${formatNumber(diagnostics.atmRv20, 2)} pts` : '-'}</strong></div>
+                  <div><span>Spot VRP (ATM IV - RV60)</span><strong style={{color: Number(diagnostics.atmRv60 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.atmRv60 != null ? `${formatNumber(diagnostics.atmRv60, 2)} pts` : '-'}</strong></div>
+                  <div><span>Spot VRP (IV Proxy - HV20)</span><strong style={{color: Number(diagnostics.ivProxyHv20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.ivProxyHv20 != null ? `${formatNumber(diagnostics.ivProxyHv20, 2)} pts` : '-'}</strong></div>
+                  <div><span>Term Slope (IV30 - IV7)</span><strong>{diagnostics.slope30_7 != null ? `${formatNumber(diagnostics.slope30_7, 2)} pts` : '-'}</strong></div>
+                  <div><span>Term Slope (IV60 - IV30)</span><strong>{diagnostics.slope60_30 != null ? `${formatNumber(diagnostics.slope60_30, 2)} pts` : '-'}</strong></div>
+                  <div><span>Spot IV/RV20 Ratio</span><strong>{diagnostics.ivRvRatioSpot != null ? `${formatNumber(diagnostics.ivRvRatioSpot, 2)}x` : '-'}</strong></div>
+                  <div><span>Percentile Gap (IV-RV)</span><strong>{diagnostics.percentileGap != null ? `${formatNumber(diagnostics.percentileGap, 1)} pts` : '-'}</strong></div>
+                </div>
+              </section>
+            </div>
+          </Panel>
           <Panel title="IV Term Structure">
             <Plot
               data={[
@@ -1701,76 +1747,7 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
             </div>
           </Panel>
         </div>
-
-        <div className="market-panels-stack">
-          <Panel title="Realized Vol Metrics">
-            <div className="kv-grid two-col market-metrics-grid">
-              <div><span>10D RV</span><strong>{formatPct(market?.rv_10d, 2)}</strong></div>
-              <div><span>20D RV</span><strong>{formatPct(market?.rv_20d, 2)}</strong></div>
-              <div><span>60D RV</span><strong>{formatPct(market?.rv_60d, 2)}</strong></div>
-              <div><span>RV Percentile</span><strong>{formatNumber(market?.rv_percentile, 2)}%</strong></div>
-            </div>
-          </Panel>
-          <Panel title="Market Regime Box">
-            <div className="kv-grid two-col market-metrics-grid">
-              <div><span>Trend Regime</span><strong style={{color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e'}}>{market?.regime?.label || '-'}</strong></div>
-              <div><span>Vol Regime (IV/RV)</span><strong>{market?.regime?.volatility_regime_score != null ? Number(market.regime.volatility_regime_score).toFixed(2) + 'x' : '-'}</strong></div>
-              <div><span>Skew (Put-Call)</span><strong>{market?.regime?.skew_regime_score != null ? (Number(market.regime.skew_regime_score) * 100).toFixed(2) + ' pts' : '-'}</strong></div>
-              <div><span>Confidence</span><strong>{market?.regime?.confidence != null ? (Number(market.regime.confidence) * 100).toFixed(1) + '%' : '-'}</strong></div>
-            </div>
-          </Panel>
-          <Panel title="Vol Stats">
-            <div className="kv-grid two-col market-metrics-grid">
-              <div><span>ATM Market IV</span><strong style={{color:'#f59e0b'}}>{market?.atm_iv != null ? (Number(market.atm_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
-              <div><span>ATM Model IV</span><strong>{market?.atm_model_iv != null ? (Number(market.atm_model_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
-              <div><span>IV Rank</span><strong>{market?.iv_rank != null ? Number(market.iv_rank).toFixed(1) + '%' : '-'}</strong></div>
-              <div><span>IV Percentile</span><strong>{market?.iv_percentile != null ? Number(market.iv_percentile).toFixed(1) + '%' : '-'}</strong></div>
-              <div><span>IV-RV Spread</span><strong style={{color: Number(market?.realized_implied_spread ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{market?.realized_implied_spread != null ? (Number(market.realized_implied_spread) * 100).toFixed(2) + ' pts' : '-'}</strong></div>
-              <div><span>VVIX Equivalent</span><strong>{market?.vvix_equivalent != null ? (Number(market.vvix_equivalent) * 100).toFixed(2) + '%' : '-'}</strong></div>
-            </div>
-            <Plot
-              data={[
-                {
-                  type: 'bar',
-                  x: ['IV Rank', 'IV Pctl', 'RV Pctl'],
-                  y: [
-                    Number(market?.iv_rank ?? 0),
-                    Number(market?.iv_percentile ?? 0),
-                    Number(market?.rv_percentile ?? 0),
-                  ],
-                  marker: { color: ['#f59e0b', '#22c55e', '#38bdf8'] },
-                },
-              ]}
-              layout={{
-                height: 160,
-                margin: { l: 30, r: 12, b: 28, t: 8 },
-                paper_bgcolor: '#0a0f19',
-                plot_bgcolor: '#0a0f19',
-                font: { color: '#d1d5db', size: 10 },
-                xaxis: { gridcolor: '#1f2937' },
-                yaxis: { title: 'Percentile', gridcolor: '#1f2937', range: [0, 100] },
-                showlegend: false,
-              }}
-              config={{ displaylogo: false, responsive: true }}
-              style={{ width: '100%' }}
-              useResizeHandler
-            />
-          </Panel>
-          <Panel title="Vol Diagnostics+">
-            <div className="kv-grid two-col market-metrics-grid">
-              <div><span>Forward VRP 20D ({selectedModel})</span><strong style={{color: Number(diagnostics.forwardVrp20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.forwardVrp20 != null ? `${formatNumber(diagnostics.forwardVrp20, 2)} pts` : '-'}</strong></div>
-              <div><span>Spot VRP (ATM IV - RV20)</span><strong style={{color: Number(diagnostics.atmRv20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.atmRv20 != null ? `${formatNumber(diagnostics.atmRv20, 2)} pts` : '-'}</strong></div>
-              <div><span>Spot VRP (ATM IV - RV60)</span><strong style={{color: Number(diagnostics.atmRv60 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.atmRv60 != null ? `${formatNumber(diagnostics.atmRv60, 2)} pts` : '-'}</strong></div>
-              <div><span>Spot VRP (IV Proxy - HV20)</span><strong style={{color: Number(diagnostics.ivProxyHv20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.ivProxyHv20 != null ? `${formatNumber(diagnostics.ivProxyHv20, 2)} pts` : '-'}</strong></div>
-              <div><span>Term Slope (IV30 - IV7)</span><strong>{diagnostics.slope30_7 != null ? `${formatNumber(diagnostics.slope30_7, 2)} pts` : '-'}</strong></div>
-              <div><span>Term Slope (IV60 - IV30)</span><strong>{diagnostics.slope60_30 != null ? `${formatNumber(diagnostics.slope60_30, 2)} pts` : '-'}</strong></div>
-              <div><span>Spot IV/RV20 Ratio</span><strong>{diagnostics.ivRvRatioSpot != null ? `${formatNumber(diagnostics.ivRvRatioSpot, 2)}x` : '-'}</strong></div>
-              <div><span>Percentile Gap (IV-RV)</span><strong>{diagnostics.percentileGap != null ? `${formatNumber(diagnostics.percentileGap, 1)} pts` : '-'}</strong></div>
-            </div>
-          </Panel>
-        </div>
       </div>
     </SnapshotGuard>
   );
 }
-

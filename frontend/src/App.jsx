@@ -1,12 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   checkBackendHealth,
   getRecentLogs,
   getSnapshotModule,
   normalizeSnapshotModules,
   runLiveForSnapshot,
+  getLatestLiveSnapshot,
+  getLiveRefreshStatus,
   aiSyncPipeline,
   aiRecalibrate,
+  triggerLiveRefresh,
 } from './api/client';
 import AICopilotPanel from './components/AICopilotPanel';
 import BacktestPage from './components/pages/BacktestPage';
@@ -37,6 +40,8 @@ const INITIAL_FORM = {
   simulation_paths: 5000,
   simulation_steps: 32,
   max_expiries: 5,
+  refresh_interval_seconds: 240,
+  auto_refresh_enabled: true,
 };
 
 const NAV_ITEMS = [
@@ -68,6 +73,8 @@ export default function App() {
   const [fetchProgress, setFetchProgress] = useState('');
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [lastPipelineData, setLastPipelineData] = useState(null);
+  const [liveRefreshStatus, setLiveRefreshStatus] = useState(null);
+  const [latestLiveVersion, setLatestLiveVersion] = useState(null);
   const [themeMode, setThemeMode] = useState(() => {
     if (typeof window === 'undefined') {
       return 'true-dark';
@@ -127,6 +134,39 @@ export default function App() {
       setRecentLogs([]);
     }
   };
+
+  const formatRefreshClock = useCallback((timestampSeconds) => {
+    const numeric = Number(timestampSeconds);
+    if (!Number.isFinite(numeric) || numeric <= 0) return '-';
+    return new Date(numeric * 1000).toLocaleTimeString();
+  }, []);
+
+  const applyPipelinePayload = useCallback((pipelinePayload, nextSnapshotId, nextLiveMetadata = null) => {
+    const updatedPayload = {
+      market_overview: pipelinePayload?.market_overview || null,
+      surface: pipelinePayload?.surface || null,
+      calibration: pipelinePayload?.calibration || null,
+      regime: pipelinePayload?.regime || null,
+      top_strategies: pipelinePayload?.top_strategies || [],
+    };
+    setLastPipelineData(updatedPayload);
+    const modules = normalizeSnapshotModules(pipelinePayload);
+    setSnapshotData({
+      market: modules.market,
+      surface: modules.surface,
+      strategies: modules.strategies,
+      risk: modules.risk,
+      backtest: modules.backtest,
+      portfolio: modules.portfolio,
+      selectedStrategyId: modules.strategies?.items?.[0]?.id || null,
+    });
+    setActiveSnapshotId(nextSnapshotId);
+    if (nextLiveMetadata?.spot != null) {
+      setForm((prev) => ({ ...prev, spot: Number(nextLiveMetadata.spot) || prev.spot }));
+      setLiveMetadata(nextLiveMetadata);
+    }
+    aiSyncPipeline(updatedPayload).catch(() => {});
+  }, [setActiveSnapshotId, setSnapshotData]);
 
   const ensureBackend = async () => {
     const health = await checkBackendHealth();
@@ -208,7 +248,6 @@ export default function App() {
           ...fallbackModules,
           selectedStrategyId: fallbackModules.strategies?.items?.[0]?.id || null,
         });
-        // Sync pipeline data to AI agents
         const pipelinePayload = {
           market_overview: fallbackModules.market || null,
           surface: fallbackModules.surface || null,
@@ -220,6 +259,15 @@ export default function App() {
         aiSyncPipeline(pipelinePayload).catch(() => { });
       }
       await loadSnapshotModules(snapshotId);
+      setLatestLiveVersion(snapshotId);
+      triggerLiveRefresh({
+        symbol: underlying,
+        max_expiries: Number(form.max_expiries),
+        refresh_interval_seconds: Number(form.refresh_interval_seconds),
+        auto_refresh_enabled: Boolean(form.auto_refresh_enabled),
+        ...pipelineParams,
+        force: false,
+      }).catch(() => {});
       setFetchProgress('');
       await fetchLogsOnce();
     } catch (requestError) {
@@ -231,6 +279,106 @@ export default function App() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const symbol = String(liveMetadata?.symbol || underlying || 'NIFTY').toUpperCase();
+    let cancelled = false;
+
+    async function pollLiveStatus() {
+      try {
+        const response = await getLiveRefreshStatus(symbol);
+        if (cancelled) return;
+        const status = response?.data || null;
+        setLiveRefreshStatus(status);
+        if (status?.version && status.version !== latestLiveVersion && status.has_snapshot) {
+          const latestResponse = await getLatestLiveSnapshot(symbol);
+          if (cancelled) return;
+          const latest = latestResponse?.data;
+          if (latest?.snapshot && latest?.version) {
+            applyPipelinePayload(
+              latest.snapshot,
+              `live-auto-${latest.version}`,
+              latest.live_metadata || null,
+            );
+            setLatestLiveVersion(latest.version);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setLiveRefreshStatus((prev) => prev || null);
+        }
+      }
+    }
+
+    pollLiveStatus();
+    const timer = setInterval(pollLiveStatus, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [applyPipelinePayload, latestLiveVersion, liveMetadata?.symbol, underlying]);
+
+  useEffect(() => {
+    if (!liveMetadata?.symbol) return;
+    triggerLiveRefresh({
+      symbol: String(liveMetadata.symbol).toUpperCase(),
+      max_expiries: Number(form.max_expiries),
+      refresh_interval_seconds: Number(form.refresh_interval_seconds),
+      auto_refresh_enabled: Boolean(form.auto_refresh_enabled),
+      risk_free_rate: Number(form.risk_free_rate),
+      dividend_yield: Number(form.dividend_yield),
+      capital_limit: Number(form.capital_limit),
+      strike_increment: Number(form.strike_increment),
+      max_legs: Number(form.max_legs),
+      max_width: Number(form.max_width),
+      simulation_paths: Number(form.simulation_paths),
+      simulation_steps: Number(form.simulation_steps),
+      model_selection: modelSelection,
+      force: false,
+    }).catch(() => {});
+  }, [
+    form.auto_refresh_enabled,
+    form.capital_limit,
+    form.dividend_yield,
+    form.max_expiries,
+    form.max_legs,
+    form.max_width,
+    form.refresh_interval_seconds,
+    form.risk_free_rate,
+    form.simulation_paths,
+    form.simulation_steps,
+    form.strike_increment,
+    liveMetadata?.symbol,
+    modelSelection,
+  ]);
+
+  const liveStatusLabel = useMemo(() => {
+    if (liveRefreshStatus?.refreshing) return 'Updating';
+    if (liveRefreshStatus?.stale_seconds == null) return 'Manual';
+    if (liveRefreshStatus.stale_seconds >= 600) return `Stale ${Math.floor(liveRefreshStatus.stale_seconds / 60)}m`;
+    return `Live ${liveRefreshStatus.stale_seconds}s`;
+  }, [liveRefreshStatus]);
+
+  const liveStatusClass = liveRefreshStatus?.refreshing
+    ? 'status-text-warn'
+    : liveRefreshStatus?.last_error
+      ? 'status-text-bad'
+      : 'status-text-ok';
+
+  const liveUpdatedLabel = useMemo(
+    () => formatRefreshClock(liveRefreshStatus?.last_success_ts),
+    [formatRefreshClock, liveRefreshStatus?.last_success_ts],
+  );
+
+  const nextRefreshLabel = useMemo(() => {
+    if (liveRefreshStatus?.cooldown_until_ts) {
+      return `Cooldown ${formatRefreshClock(liveRefreshStatus.cooldown_until_ts)}`;
+    }
+    if (!liveRefreshStatus?.auto_refresh_enabled) {
+      return 'Paused';
+    }
+    return formatRefreshClock(liveRefreshStatus?.next_refresh_ts);
+  }, [formatRefreshClock, liveRefreshStatus?.auto_refresh_enabled, liveRefreshStatus?.cooldown_until_ts, liveRefreshStatus?.next_refresh_ts]);
 
   const renderSettingsPage = () => (
     <div className="page-settings-grid">
@@ -326,7 +474,31 @@ export default function App() {
               onChange={(event) => setForm((prev) => ({ ...prev, max_width: Number(event.target.value) }))}
             />
           </label>
+          <label>
+            Auto refresh
+            <select
+              value={form.auto_refresh_enabled ? 'on' : 'off'}
+              onChange={(event) => setForm((prev) => ({ ...prev, auto_refresh_enabled: event.target.value === 'on' }))}
+            >
+              <option value="on">Enabled</option>
+              <option value="off">Paused</option>
+            </select>
+          </label>
+          <label>
+            Refresh interval
+            <select
+              value={form.refresh_interval_seconds}
+              onChange={(event) => setForm((prev) => ({ ...prev, refresh_interval_seconds: Number(event.target.value) }))}
+            >
+              {[180, 240, 300, 420, 600].map((seconds) => (
+                <option key={seconds} value={seconds}>{Math.round(seconds / 60)} min</option>
+              ))}
+            </select>
+          </label>
         </div>
+        <span style={{ fontSize: '11px', color: '#9ca3af', marginTop: 6, display: 'block', lineHeight: 1.4 }}>
+          Auto refresh runs from the backend only, during NSE market hours, with jitter and cooldown after repeated block responses.
+        </span>
       </Panel>
       <Panel title="Simulation Paths">
         <label>
@@ -549,8 +721,68 @@ export default function App() {
         style={{ '--panel-title-color': panelTitleColor }}
       >
         <div className="bbg-main">
+          <header className="top-status-bar">
+            <div className="top-status-primary">
+              <div className="brand top-status-brand">VOL TRADING</div>
+              <label>
+                Underlying
+                <select
+                  value={underlying}
+                  onChange={(event) => {
+                    setUnderlying(event.target.value);
+                    setSelectedExpiry('auto');
+                  }}
+                  title="Choose the live NSE index to fetch."
+                >
+                  <option value="NIFTY">NIFTY</option>
+                  <option value="BANKNIFTY">BANKNIFTY</option>
+                </select>
+              </label>
+              <label>
+                View Expiry
+                <select
+                  value={selectedExpiry}
+                  onChange={(event) => setSelectedExpiry(event.target.value)}
+                  disabled={!selectedExpiryOptions.length || selectedExpiryOptions.length === 1}
+                  title="Changes the selected expiry slice across supported views."
+                >
+                  {selectedExpiryOptions.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="top-metric"><span>Spot</span><strong>{formatNumber(market?.spot || form.spot, 2)}</strong></div>
+              <div className="top-metric"><span>IV ATM</span><strong>{market?.atm_iv != null ? (Number(market.atm_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
+              <div className="top-metric" title="Model-derived market state indicator. Informational only.">
+                <span>Regime</span>
+                <strong style={{ color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e' }}>{regimeLabel}</strong>
+              </div>
+              <button type="button" className="action-btn accent top-fetch-btn" onClick={runLive} disabled={loading}>
+                {loading ? 'Running...' : 'Fetch Live & Analyse'}
+              </button>
+            </div>
+
+            <div className="top-status-meta">
+              <div className="top-mini-metric"><span>Source</span><strong className="status-text-ok">NSE Live</strong></div>
+              <div className="top-mini-metric" title="Background refresh status from the backend live snapshot manager.">
+                <span>Live</span>
+                <strong className={liveStatusClass}>{liveStatusLabel}</strong>
+              </div>
+              <div className="top-mini-metric" title="Last successful background refresh time.">
+                <span>Updated</span>
+                <strong>{liveUpdatedLabel}</strong>
+              </div>
+              <div className="top-mini-metric" title="Next backend refresh attempt or cooldown release time.">
+                <span>Next</span>
+                <strong>{nextRefreshLabel}</strong>
+              </div>
+              <div className="top-mini-metric"><span>Clock</span><strong>{clockValue.toLocaleTimeString()}</strong></div>
+            </div>
+          </header>
+
           <header className="top-nav-bar">
-            <div className="brand">VOL TRADING</div>
             <nav className="nav-strip">
               {NAV_ITEMS.map((item) => (
                 <button
@@ -563,49 +795,6 @@ export default function App() {
                 </button>
               ))}
             </nav>
-          </header>
-
-          <header className="top-status-bar">
-            <label>
-              Underlying
-              <select
-                value={underlying}
-                onChange={(event) => {
-                  setUnderlying(event.target.value);
-                  setSelectedExpiry('auto');
-                }}
-                title="Choose the live NSE index to fetch."
-              >
-                <option value="NIFTY">NIFTY</option>
-                <option value="BANKNIFTY">BANKNIFTY</option>
-              </select>
-            </label>
-            <label>
-              View Expiry
-              <select
-                value={selectedExpiry}
-                onChange={(event) => setSelectedExpiry(event.target.value)}
-                disabled={!selectedExpiryOptions.length || selectedExpiryOptions.length === 1}
-                title="Changes the selected expiry slice across supported views."
-              >
-                {selectedExpiryOptions.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="top-metric"><span>Spot</span><strong>{formatNumber(market?.spot || form.spot, 2)}</strong></div>
-            <div className="top-metric"><span>IV ATM</span><strong>{market?.atm_iv != null ? (Number(market.atm_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
-            <div className="top-metric" title="Model-derived market state indicator. Informational only.">
-              <span>Regime</span>
-              <strong style={{ color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e' }}>{regimeLabel}</strong>
-            </div>
-            <div className="top-metric"><span>Source</span><strong className="status-text-ok">NSE Live</strong></div>
-            <div className="top-metric"><span>Clock</span><strong>{clockValue.toLocaleTimeString()}</strong></div>
-            <button type="button" className="action-btn accent" onClick={runLive} disabled={loading}>
-              {loading ? 'Running...' : 'Fetch Live & Analyse'}
-            </button>
           </header>
 
           {error ? <div className="error-box">{error}</div> : null}

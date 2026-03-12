@@ -13,6 +13,7 @@ from ..exceptions import CalibrationError, DataIngestionError, EngineError, Simu
 from ..logger import get_logger
 from ..services.engine_service import LivePipelineRequest, PipelineRequest, StrategyEngineService
 from ..services.job_service import AsyncJobService
+from ..services.live_refresh_service import LiveRefreshService
 from ..simulation.dynamic_hedge import HedgeMode
 from ..ai.orchestrator_agent import OrchestratorAgent
 from ..ai.strategy_picker import StrategyPickerAgent
@@ -79,6 +80,23 @@ class LiveStaticPipelinePayload(BaseModel):
     simulation_paths: int = Field(default=30000, ge=1000)
     simulation_steps: int = Field(default=64, ge=8)
     model_selection: str = Field(default="SABR", description="Default surface comparison model: Heston or SABR")
+
+
+class LiveRefreshPayload(BaseModel):
+    symbol: str = Field(default="NIFTY", description="Index symbol: NIFTY or BANKNIFTY")
+    max_expiries: int = Field(default=5, ge=1, le=20)
+    refresh_interval_seconds: int = Field(default=240, ge=120, le=1800)
+    auto_refresh_enabled: bool = True
+    risk_free_rate: float = 0.065
+    dividend_yield: float = 0.012
+    capital_limit: float = Field(default=500000.0, gt=0.0)
+    strike_increment: int = Field(default=50, gt=0)
+    max_legs: int = Field(default=4, ge=1, le=6)
+    max_width: float = Field(default=1000.0, gt=0.0)
+    simulation_paths: int = Field(default=5000, ge=500)
+    simulation_steps: int = Field(default=32, ge=8)
+    model_selection: str = Field(default="SABR")
+    force: bool = False
 
 
 class AIChatPayload(BaseModel):
@@ -150,6 +168,7 @@ router = APIRouter()
 _logger = get_logger("APIRouter")
 _engine = StrategyEngineService()
 _jobs = AsyncJobService()
+_live_refresh = LiveRefreshService(_engine)
 _orchestrator = OrchestratorAgent()
 _strategy_picker = StrategyPickerAgent()
 _positioning = PositioningService()
@@ -329,6 +348,13 @@ def run_live_static_pipeline(payload: LiveStaticPipelinePayload) -> dict:
     try:
         request = LivePipelineRequest(**payload.model_dump())
         response = _engine.run_live_pipeline(request=request)
+        cached = _engine.get_cached_nse_data(payload.data_id) or {}
+        _live_refresh.seed_from_manual_pipeline(
+            data_id=payload.data_id,
+            pipeline_params=payload.model_dump(),
+            max_expiries=len(getattr(cached.get("fetch_result"), "expiry_dates", []) or []) or 5,
+            pipeline_result=response,
+        )
         _logger.info("END | run_live_static_pipeline")
         return {"status": "ok", "data": response}
     except ValueError as exc:
@@ -340,6 +366,50 @@ def run_live_static_pipeline(payload: LiveStaticPipelinePayload) -> dict:
     except Exception as exc:
         _logger.exception("ERROR | run_live_static_pipeline")
         raise HTTPException(status_code=500, detail=f"Internal error: {exc}") from exc
+
+
+@router.post("/live/refresh")
+def trigger_live_refresh(payload: LiveRefreshPayload) -> dict:
+    _logger.info("START | trigger_live_refresh | symbol=%s", payload.symbol)
+    try:
+        status = _live_refresh.trigger_refresh(
+            symbol=payload.symbol,
+            pipeline_params=payload.model_dump(exclude={"symbol", "max_expiries", "refresh_interval_seconds", "auto_refresh_enabled", "force"}),
+            max_expiries=payload.max_expiries,
+            refresh_interval_seconds=payload.refresh_interval_seconds,
+            auto_refresh_enabled=payload.auto_refresh_enabled,
+            force=payload.force,
+        )
+        _logger.info("END | trigger_live_refresh | symbol=%s", payload.symbol)
+        return {"status": "ok", "data": status}
+    except Exception as exc:
+        _logger.exception("ERROR | trigger_live_refresh")
+        raise HTTPException(status_code=500, detail=f"Unable to start live refresh: {exc}") from exc
+
+
+@router.get("/live/status")
+def get_live_refresh_status(symbol: str = "NIFTY") -> dict:
+    _logger.info("START | get_live_refresh_status | symbol=%s", symbol)
+    try:
+        return {"status": "ok", "data": _live_refresh.get_status(symbol)}
+    except Exception as exc:
+        _logger.exception("ERROR | get_live_refresh_status")
+        raise HTTPException(status_code=500, detail=f"Unable to read live status: {exc}") from exc
+
+
+@router.get("/live/latest")
+def get_live_latest_snapshot(symbol: str = "NIFTY") -> dict:
+    _logger.info("START | get_live_latest_snapshot | symbol=%s", symbol)
+    try:
+        latest = _live_refresh.get_latest_snapshot(symbol)
+        if latest is None:
+            raise HTTPException(status_code=404, detail=f"No cached live snapshot for {symbol}")
+        return {"status": "ok", "data": latest}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _logger.exception("ERROR | get_live_latest_snapshot")
+        raise HTTPException(status_code=500, detail=f"Unable to read latest live snapshot: {exc}") from exc
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -65,16 +65,16 @@ class LiveFetchPayload(BaseModel):
         description='List of expiry date strings, or null/["all"] for all',
     )
     max_expiries: int = Field(
-        default=5,
+        default=4,
         ge=1,
         le=20,
-        description="Maximum number of near-term expiries to fetch (default 5)",
+        description="Maximum number of near-term expiries to fetch (default 4)",
     )
 
 
 class LiveSourceComparePayload(BaseModel):
     symbol: str = Field(default="NIFTY", description="Index symbol to compare across sources")
-    max_expiries: int = Field(default=5, ge=1, le=20)
+    max_expiries: int = Field(default=4, ge=1, le=20)
 
 
 class LiveStaticPipelinePayload(BaseModel):

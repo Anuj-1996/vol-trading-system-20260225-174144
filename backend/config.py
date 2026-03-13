@@ -38,7 +38,7 @@ class LoggingConfig:
 class DataConfig:
     data_root: Path = Path("data")
     file_pattern: str = "NIFTY_*_option_chain_*.csv"
-    strike_increment_allowed: Tuple[int, int] = (50, 100)
+    strike_increment_allowed: Tuple[int, int] = (100, 100)
     source: str = DATA_SOURCE
 
 

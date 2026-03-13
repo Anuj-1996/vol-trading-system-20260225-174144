@@ -96,8 +96,12 @@ class KiteOptionUniverseBuilder:
             symbol.upper(), self._underlying_symbol
         )
 
+
         instrument_map: Dict[int, KiteInstrumentMeta] = {}
         expiry_map: Dict[date, List[int]] = {}
+        # Collect all strikes per expiry for filtering
+        strikes_by_expiry: Dict[date, List[float]] = {}
+        meta_by_token: Dict[int, KiteInstrumentMeta] = {}
 
         for row in nfo_instruments:
             name = str(row.get("name", "") or "").upper()
@@ -123,8 +127,40 @@ class KiteOptionUniverseBuilder:
                 exchange=str(row.get("exchange", "NFO") or "NFO"),
                 lot_size=self._safe_int(row.get("lot_size")),
             )
-            instrument_map[token] = meta
+            meta_by_token[token] = meta
+            strikes_by_expiry.setdefault(expiry, []).append(strike)
             expiry_map.setdefault(expiry, []).append(token)
+
+
+        # --- GLOBAL TOKEN LIMIT LOGIC ---
+
+        MAX_ABOVE_BELOW = 1500
+        for expiry, tokens in expiry_map.items():
+            # Split tokens into calls and puts
+            call_tokens = [token for token in tokens if meta_by_token[token].option_type == 'CE']
+            put_tokens = [token for token in tokens if meta_by_token[token].option_type == 'PE']
+            # Get strikes for each
+            call_strikes = [meta_by_token[token].strike for token in call_tokens]
+            put_strikes = [meta_by_token[token].strike for token in put_tokens]
+            if not call_strikes or not put_strikes:
+                continue
+            # Find ATM (median of all strikes)
+            all_strikes = sorted(call_strikes + put_strikes)
+            atm_strike = all_strikes[len(all_strikes) // 2]
+            # Sort calls and puts by distance from ATM, above and below
+            calls_above = sorted([token for token in call_tokens if meta_by_token[token].strike >= atm_strike], key=lambda t: meta_by_token[t].strike)
+            calls_below = sorted([token for token in call_tokens if meta_by_token[token].strike < atm_strike], key=lambda t: -meta_by_token[t].strike)
+            puts_above = sorted([token for token in put_tokens if meta_by_token[token].strike >= atm_strike], key=lambda t: meta_by_token[t].strike)
+            puts_below = sorted([token for token in put_tokens if meta_by_token[token].strike < atm_strike], key=lambda t: -meta_by_token[t].strike)
+            # Select up to MAX_ABOVE_BELOW from each side for both calls and puts
+            selected_tokens = (
+                calls_below[:MAX_ABOVE_BELOW] + calls_above[:MAX_ABOVE_BELOW] +
+                puts_below[:MAX_ABOVE_BELOW] + puts_above[:MAX_ABOVE_BELOW]
+            )
+            expiry_map[expiry] = selected_tokens
+
+        # Only keep tokens that survived filtering
+        instrument_map = {token: meta_by_token[token] for tokens in expiry_map.values() for token in tokens}
 
         if not instrument_map:
             raise DataIngestionError(

@@ -1112,7 +1112,7 @@ export default function SurfacePage({
                 },
               ]}
               layout={{
-                height: 150,
+                height: 300,
                 margin: { l: 34, r: 12, b: 24, t: 20 },
                 paper_bgcolor: '#0a0f19',
                 plot_bgcolor: '#0a0f19',
@@ -1146,7 +1146,7 @@ export default function SurfacePage({
                 },
               ]}
               layout={{
-                height: 150,
+                height: 300,
                 margin: { l: 34, r: 12, b: 24, t: 20 },
                 paper_bgcolor: '#0a0f19',
                 plot_bgcolor: '#0a0f19',

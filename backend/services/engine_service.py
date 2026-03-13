@@ -221,7 +221,9 @@ class StrategyEngineService:
         self._kite_client.authenticate()
         nfo_instruments = self._kite_client.get_instruments("NFO")
         underlying_instruments = self._kite_client.get_instruments("NSE")
-        universe = self._kite_universe.build(
+        # Always create a fresh universe builder to avoid stale/accumulated state
+        kite_universe_builder = KiteOptionUniverseBuilder(underlying_symbol=CONFIG.zerodha.underlying_symbol)
+        universe = kite_universe_builder.build(
             nfo_instruments=nfo_instruments,
             underlying_instruments=underlying_instruments,
             symbol=symbol,

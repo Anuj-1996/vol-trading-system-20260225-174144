@@ -26,7 +26,7 @@ function npdf(x) {
   return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
 }
 // Error function
-function erf(x) {
+export function erf(x) {
   // Abramowitz and Stegun formula 7.1.26
   const sign = x < 0 ? -1 : 1;
   x = Math.abs(x);

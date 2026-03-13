@@ -1,48 +1,27 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
-import { fetchDealerPositioning, fetchMonteCarloVariant } from '../../api/client';
-import { bsmGreeks } from '../../utils/bsmGreeks';
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
+// Helper to describe exposure zone context
+function describeZone(tag, value) {
+  if (!tag || tag === '-') return '';
+  if (tag === 'wall') return 'This strike is a major exposure wall, likely to act as a magnet or barrier.';
+  if (tag === 'flip') return 'This strike is a flip zone where exposure changes sign, so it can act as a pivot.';
+  if (tag === 'magnet') return 'This strike is a local magnet for price action.';
+  if (tag === 'void') return 'This strike is in a low-exposure void, so it may see less trading interest.';
+  // Add more tags as needed
+  if (typeof value === 'number') {
+    if (value > 0) return 'Net exposure is positive here.';
+    if (value < 0) return 'Net exposure is negative here.';
+  }
+  return `Exposure tag: ${tag}`;
 }
-
-function formatRsValue(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '-';
-  return `₹${Math.round(numeric).toLocaleString('en-IN')}`;
-}
-
-function formatShortRs(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '-';
-  const abs = Math.abs(numeric);
-  if (abs >= 1e7) return `₹${formatNumber(numeric / 1e7, 2)} Cr`;
-  if (abs >= 1e5) return `₹${formatNumber(numeric / 1e5, 1)} L`;
-  return formatRsValue(numeric);
-}
-
-function formatSignedRs(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '-';
-  const sign = numeric > 0 ? '+' : '';
-  return `${sign}${formatShortRs(numeric)}`;
-}
-
-function erf(x) {
-  const sign = x < 0 ? -1 : 1;
-  const value = Math.abs(x);
-  const a1 = 0.254829592;
-  const a2 = -0.284496736;
-  const a3 = 1.421413741;
-  const a4 = -1.453152027;
-  const a5 = 1.061405429;
-  const p = 0.3275911;
-  const t = 1 / (1 + p * value);
-  const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-value * value);
-  return sign * y;
-}
-
+const EXPOSURE_LABELS = {
+  hidden: 'GEX',
+  gex: 'GEX',
+  dex: 'DEX',
+  vanna: 'Vanna',
+  charm: 'Charm',
+  vega: 'Vega',
+  gamma: 'Gamma',
+  theta: 'Theta',
+};
 const GREEK_LABELS = {
   delta: 'Δ',
   gamma: 'Γ',
@@ -60,45 +39,40 @@ const MODEL_LABELS = {
   Avg3: 'Avg 3',
 };
 
-const EXPOSURE_LABELS = {
-  hidden: 'Hidden',
-  gamma: 'Gamma',
-  vega: 'Vega',
-  charm: 'Charm',
-  delta: 'Delta',
-};
-
 function nearestIndex(values, target) {
   if (!Array.isArray(values) || !values.length || !Number.isFinite(target)) return -1;
   return values.reduce((bestIndex, value, index) => (
     Math.abs(Number(value) - target) < Math.abs(Number(values[bestIndex]) - target) ? index : bestIndex
   ), 0);
 }
+import React, { useEffect, useMemo, useState } from 'react';
+import ThemedPlot from '../ThemedPlot';
+import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
+import { fetchDealerPositioning, fetchMonteCarloVariant } from '../../api/client';
+import { bsmGreeks, erf } from '../../utils/bsmGreeks';
 
-function describeZone(tag, exposureValue) {
-  if (tag === 'Call Wall') {
-    return 'Call Wall means heavy overhead call positioning. Price often slows down or faces resistance near this strike.';
-  }
-  if (tag === 'Put Wall') {
-    return 'Put Wall means stronger downside put support. Price often stabilizes or finds a floor near this strike.';
-  }
-  if (tag === 'Pin Zone') {
-    const colorHint = Number(exposureValue) >= 0 ? 'green-toned pin zone' : 'red-toned pin zone';
-    return `Pin Zone means price can get magnetized around this strike into expiry. A ${colorHint} usually signals more stabilizing pressure, while red suggests weaker or more fragile pinning.`;
-  }
-  if (tag === 'Support') {
-    return 'Support means positive dealer positioning can help cushion downside moves around this strike.';
-  }
-  if (tag === 'Resistance') {
-    return 'Resistance means upside can run into positioning pressure around this strike.';
-  }
-  if (tag === 'Air Pocket') {
-    return 'Air Pocket means thinner stabilizing support. If price moves here, it can travel faster.';
-  }
-  if (tag === 'Flip Zone') {
-    return 'Flip Zone means gamma can change sign around here, so market behavior may become less stable if price crosses it.';
-  }
-  return 'This zone is informational and reflects how positioning is clustered around the selected strike.';
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function formatRsValue(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '-';
+  return `₹${Math.round(numeric).toLocaleString('en-IN')}`;
+}
+
+function formatShortRs(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '-';
+  const sign = numeric > 0 ? '+' : '';
+  return `${sign}${formatNumber(numeric, 2)}`;
+}
+
+function formatSignedRs(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '-';
+  const sign = numeric > 0 ? '+' : '';
+  return `${sign}${formatShortRs(numeric)}`;
 }
 
 function describeStrikeContext(row, spot) {
@@ -196,6 +170,7 @@ export default function OptionChainPage({
   const [focusedStrike, setFocusedStrike] = useState(null);
   const [positioning, setPositioning] = useState(null);
   const [monteCarloVariant, setMonteCarloVariant] = useState(null);
+  const [plotModelView, setPlotModelView] = useState('hidden');
 
   useEffect(() => {
     setLocalExpiryIndex(selectedExpiryIndex);
@@ -768,8 +743,9 @@ export default function OptionChainPage({
           )}
 
           {chainView === 'table' && (
-          <div className="option-chain-table-wrap">
-            <table className="dense-table option-chain-table">
+            <>
+              <div className="option-chain-table-wrap">
+                <table className="dense-table option-chain-table">
               <thead>
                 <tr>
                   <th>Call LTP</th>
@@ -865,7 +841,7 @@ export default function OptionChainPage({
                       <td className="option-chain-center">{row.callProbItm != null ? `${formatNumber(row.callProbItm * 100, 1)}%` : '-'}</td>
                       <td className="option-chain-center">{row.putProbItm != null ? `${formatNumber(row.putProbItm * 100, 1)}%` : '-'}</td>
                       <td className="option-chain-center">{row.iv > 0 ? `${formatNumber(row.iv * 100, 2)}%` : '-'}</td>
-                      {modelView !== 'hidden' && <td className="option-chain-center">{modelSlice?.iv > 0 ? `${formatNumber(modelSlice.iv * 100, 2)}%` : '-'}</td>}
+                      {modelView !== 'hidden' && <td className="option-chain-center">{modelSlice?.iv > 0 ? `${formatNumber(modelSlice.iv * 100, 2)}% ${MODEL_LABELS[modelView]}` : '-'}</td>}
                       {modelView !== 'hidden' && <td className="option-chain-center">{modelSlice?.iv > 0 && row.iv > 0 ? `${formatNumber((row.iv - modelSlice.iv) * 100, 2)} pts` : '-'}</td>}
                       <td className="option-chain-center">
                         <div className="oi-cell">
@@ -894,6 +870,9 @@ export default function OptionChainPage({
               </tbody>
             </table>
           </div>
+          {/* 2D Plot: Market-Model Price Difference vs Strike (below the table) */}
+          {/* (REMOVED: duplicate plot rendering here) */}
+          </>
           )}
 
           {chainView === 'ladder' && (
@@ -967,6 +946,150 @@ export default function OptionChainPage({
           )}
         </Panel>
 
+        {/* Separate Panel for Market-Model Price Difference Plot */}
+        <Panel title={<span style={{ color: '#ffb300', fontWeight: 700, letterSpacing: 0.5 }}>MARKET-MODEL PRICE DIFFERENCE</span>}>
+          <div style={{ margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <label style={{ fontWeight: 500, color: '#fff', fontSize: 16, letterSpacing: 0.2 }}>
+              Plot Model Compare
+              <select
+                value={plotModelView}
+                onChange={e => setPlotModelView(e.target.value)}
+                style={{
+                  marginLeft: 8,
+                  background: '#181c24',
+                  color: '#fff',
+                  border: '1px solid #444',
+                  borderRadius: 4,
+                  padding: '4px 12px',
+                  fontSize: 15,
+                  fontWeight: 500,
+                  outline: 'none',
+                  minWidth: 120,
+                }}
+              >
+                <option value="hidden">Hidden</option>
+                <option value="Heston">Heston</option>
+                <option value="SABR">SABR</option>
+                <option value="BSM">BSM</option>
+                <option value="MonteCarlo">Monte Carlo</option>
+                <option value="Avg3">Avg 3</option>
+                <option value="ParityDiff">Put-Call Parity Diff</option>
+              </select>
+            </label>
+          </div>
+          {plotModelView !== 'hidden' && (
+            <div style={{ marginTop: 8 }}>
+              {(() => {
+                // Prepare data for plot: x = strike, y = market-model price diff, for call and put
+                const strikes = visibleRows.map(row => row.strike);
+                const lotSize = visibleRows[0]?.lotSize || 1;
+                // Find ATM strike
+                const atmRow = visibleRows.find(row => row.isAtm);
+                const atmStrike = atmRow ? atmRow.strike : null;
+                let traces = [];
+                let hasData = false;
+                if (plotModelView === 'ParityDiff') {
+                  // Only show parity diff traces
+                  const parityCallDiff = visibleRows.map(row => (row.callDisplayPrice - row.parityCall) * lotSize);
+                  const parityPutDiff = visibleRows.map(row => (row.putDisplayPrice - row.parityPut) * lotSize);
+                  hasData = strikes.length > 0 && (parityCallDiff.some(v => v !== null) || parityPutDiff.some(v => v !== null));
+                  traces = [
+                    {
+                      x: strikes,
+                      y: parityCallDiff,
+                      name: 'Call (Market - Parity)',
+                      mode: 'lines+markers',
+                      marker: { color: '#0288d1' },
+                      line: { dash: 'dot', color: '#0288d1' },
+                    },
+                    {
+                      x: strikes,
+                      y: parityPutDiff,
+                      name: 'Put (Market - Parity)',
+                      mode: 'lines+markers',
+                      marker: { color: '#c62828' },
+                      line: { dash: 'dot', color: '#c62828' },
+                    },
+                  ];
+                } else {
+                  // Show only model diff traces
+                  const callDiff = visibleRows.map(row => {
+                    const modelSlice = row.modelSlices?.[plotModelView];
+                    return modelSlice?.callPrice != null ? (row.callDisplayPrice - modelSlice.callPrice) * lotSize : null;
+                  });
+                  const putDiff = visibleRows.map(row => {
+                    const modelSlice = row.modelSlices?.[plotModelView];
+                    return modelSlice?.putPrice != null ? (row.putDisplayPrice - modelSlice.putPrice) * lotSize : null;
+                  });
+                  hasData = strikes.length > 0 && (callDiff.some(v => v !== null) || putDiff.some(v => v !== null));
+                  traces = [
+                    {
+                      x: strikes,
+                      y: callDiff,
+                      name: 'Call (Market - Model)',
+                      mode: 'lines+markers',
+                      marker: { color: '#1976d2' },
+                      line: { color: '#1976d2' },
+                    },
+                    {
+                      x: strikes,
+                      y: putDiff,
+                      name: 'Put (Market - Model)',
+                      mode: 'lines+markers',
+                      marker: { color: '#d32f2f' },
+                      line: { color: '#d32f2f' },
+                    },
+                  ];
+                }
+                if (!hasData) {
+                  return <div style={{ color: '#888', padding: 24, textAlign: 'center' }}>No data to plot for selected model.</div>;
+                }
+                return (
+                  <ThemedPlot
+                    data={traces}
+                    layout={{
+                      title: '',
+                      xaxis: { title: 'Strike Price' },
+                      yaxis: { title: plotModelView === 'ParityDiff' ? 'Market - Parity Price (₹)' : 'Market - Model Price (₹)' },
+                      legend: { orientation: 'h', y: -0.2 },
+                      margin: { t: 20, l: 60, r: 20, b: 60 },
+                      height: 340,
+                      shapes: atmStrike ? [
+                        {
+                          type: 'line',
+                          x0: atmStrike,
+                          x1: atmStrike,
+                          yref: 'paper',
+                          y0: 0,
+                          y1: 1,
+                          line: {
+                            color: '#ffb300',
+                            width: 2,
+                            dash: 'dash',
+                          },
+                        },
+                      ] : [],
+                      annotations: atmStrike ? [
+                        {
+                          x: atmStrike,
+                          y: 1.02,
+                          xref: 'x',
+                          yref: 'paper',
+                          text: `ATM ${atmStrike}`,
+                          showarrow: false,
+                          font: { color: '#ffb300', size: 15, family: 'inherit', weight: 'bold' },
+                          align: 'center',
+                        },
+                      ] : [],
+                    }}
+                    config={{ displayModeBar: false }}
+                    style={{ width: '100%', minHeight: 340 }}
+                  />
+                );
+              })()}
+            </div>
+          )}
+        </Panel>
         {detailCardEnabled && activeRow && (
           <div className="option-chain-floating-card">
             <div className="option-chain-focus-top">

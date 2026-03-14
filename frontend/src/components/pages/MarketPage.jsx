@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import GreekVsStrikesGRG from './GreekVsStrikesGRG.jsx';
 import Plot from '../ThemedPlot';
 import { Panel, SnapshotGuard, formatNumber, formatPct } from './shared.jsx';
 
@@ -299,6 +300,8 @@ function bsmGreeks(S, K, T, sigma, r, isCall) {
 // ────────────────────────────────────────────────────────────────────────
 
 export default function MarketPage({ loading = false, activeSnapshotId = null, market = {}, surface = {}, selectedExpiryIndex = 0 }) {
+  // Legend visibility for GRG
+  const [grgShowLegend, setGrgShowLegend] = useState(true);
   const [selectedModel, setSelectedModel] = useState('GARCH');
   const [scatterXKey, setScatterXKey] = useState('hv20');
   const [scatterYKey, setScatterYKey] = useState('iv_proxy');
@@ -1317,9 +1320,28 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
                 ? sortedStrikes.reduce((bi,s,i) => Math.abs(s-atmStrike)<Math.abs(sortedStrikes[bi]-atmStrike)?i:bi, 0)
                 : 0;
               // Strike options for dropdown (within ±1500 of ATM)
-              const grgStrikeOptions = sortedStrikes
-                .map((s,i) => ({ label: s.toLocaleString(), value: i }))
-                .filter(({ value }) => atmStrike==null || Math.abs(sortedStrikes[value]-atmStrike)<=1500);
+              // Build strike options as ATM, ATM±100, ±200, ... up to ±1500
+              let grgStrikeOptions = [];
+              if (atmStrike != null && sortedStrikes.length > 0) {
+                const atmIdxInSorted = atmIdx;
+                grgStrikeOptions.push({ label: `${sortedStrikes[atmIdxInSorted].toLocaleString()} (ATM)`, value: atmIdxInSorted });
+                for (let offset = 100; offset <= 1500; offset += 100) {
+                  // ATM + offset
+                  const plusIdx = sortedStrikes.findIndex((s, i) => i > atmIdxInSorted && Math.abs(s - (atmStrike + offset)) < 50);
+                  if (plusIdx !== -1) {
+                    grgStrikeOptions.push({ label: `${sortedStrikes[plusIdx].toLocaleString()} (ATM+${offset})`, value: plusIdx });
+                  }
+                  // ATM - offset
+                  const minusIdx = sortedStrikes.findIndex((s, i) => i < atmIdxInSorted && Math.abs(s - (atmStrike - offset)) < 50);
+                  if (minusIdx !== -1) {
+                    grgStrikeOptions.push({ label: `${sortedStrikes[minusIdx].toLocaleString()} (ATM-${offset})`, value: minusIdx });
+                  }
+                }
+                // Sort by strike value ascending
+                grgStrikeOptions = grgStrikeOptions.sort((a, b) => sortedStrikes[a.value] - sortedStrikes[b.value]);
+              } else {
+                grgStrikeOptions = sortedStrikes.map((s, i) => ({ label: s.toLocaleString(), value: i }));
+              }
               const effectiveStrikeIdx = grgStrikeIdx != null ? grgStrikeIdx : atmIdx;
               const K = sortedStrikes[effectiveStrikeIdx];
               const isCall = grgOptionType === 'call';
@@ -1369,49 +1391,44 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
               const xR = [_x0 - _xp, _x1 + _xp];
               const yR = [_y0 - _yp, _y1 + _yp];
               // Build plot traces: one trail + endpoint per Greek
-              const traces = hasGrg ? GREEK_KEYS.flatMap((k) => {
-                const pts = withMomentum.filter(d => d.ratio[k] != null && d.mom[k] != null);
-                if (pts.length === 0) return [];
-                const lastPt = pts[pts.length - 1];
-                return [
-                  // trail line
-                  {
-                    type: 'scatter', mode: 'lines',
+              const traces = React.useMemo(() => {
+                if (!hasGrg) return [];
+                return GREEK_KEYS.map((k) => {
+                  const pts = withMomentum.filter(d => d.ratio[k] != null && d.mom[k] != null);
+                  if (pts.length === 0) return null;
+                  return {
+                    type: 'scatter',
+                    mode: 'lines+markers+text',
                     x: pts.map(d => d.ratio[k]),
                     y: pts.map(d => d.mom[k]),
-                    line: { color: GREEK_COLORS[k], width: 1.5, dash: 'dot' },
-                    showlegend: false, hoverinfo: 'skip',
-                  },
-                  // all points (small)
-                  {
-                    type: 'scatter', mode: 'markers+text',
-                    x: pts.slice(0,-1).map(d => d.ratio[k]),
-                    y: pts.slice(0,-1).map(d => d.mom[k]),
-                    marker: { color: GREEK_COLORS[k], size: 5, opacity: 0.5 },
-                    text: pts.slice(0,-1).map(d => d.days+'D'),
-                    textposition: 'top center',
-                    textfont: { size: 8, color: GREEK_COLORS[k] },
-                    showlegend: false, hovertemplate: `<b>${GREEK_LABELS[k]}</b><br>%{x:.1f} / %{y:.1f}<extra></extra>`,
-                  },
-                  // current point (large)
-                  {
-                    type: 'scatter', mode: 'markers+text',
-                    x: [lastPt.ratio[k]],
-                    y: [lastPt.mom[k]],
-                    marker: { color: GREEK_COLORS[k], size: 14, line: { color: '#fff', width: 1.5 } },
-                    text: [GREEK_LABELS[k]],
+                    marker: { color: GREEK_COLORS[k], size: 8, line: { color: '#fff', width: 1.5 } },
+                    line: { color: GREEK_COLORS[k], width: 2, dash: 'dot' },
+                    text: pts.map(d => d.days+'D'),
                     textposition: 'top center',
                     textfont: { size: 10, color: GREEK_COLORS[k] },
                     name: GREEK_LABELS[k],
-                    hovertemplate: `<b>${GREEK_LABELS[k]}</b> @ ${lastPt.label}<br>RS-Ratio: %{x:.1f}<br>RS-Mom: %{y:.1f}<br>${k==='iv'?'IV':''}${k==='delta'?'Δ':''}${k==='gamma'?'Γ':''}${k==='theta'?'Θ':''}${k==='vega'?'ν':''}: ${lastPt.gK?Number(lastPt.gK[k]).toFixed(4):'-'}<extra></extra>`,
-                  },
-                ];
-              }) : [];
+                    legendgroup: GREEK_LABELS[k],
+                    hovertemplate: `<b>${GREEK_LABELS[k]}</b><br>RS-Ratio: %{x:.1f}<br>RS-Mom: %{y:.1f}<br>Days: %{text}<extra></extra>`,
+                    showlegend: true,
+                  };
+                }).filter(Boolean);
+              }, [hasGrg, withMomentum]);
 
               const currentExpiry = withMomentum[withMomentum.length - 1];
               return (
                 <>
                   <div style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'8px', flexWrap:'wrap' }}>
+                                        <label style={{ color:'#9ca3af', fontSize:12 }}>
+                                          Legend
+                                          <select
+                                            value={grgShowLegend ? 'on' : 'off'}
+                                            onChange={e => setGrgShowLegend(e.target.value === 'on')}
+                                            style={{ marginLeft:'6px', background:'#1f2937', color:'#d1d5db', border:'1px solid #374151', borderRadius:4, padding:'2px 6px' }}
+                                          >
+                                            <option value="on">On</option>
+                                            <option value="off">Off</option>
+                                          </select>
+                                        </label>
                     <div style={{ display:'flex', borderRadius:6, overflow:'hidden', border:'1px solid #374151' }}>
                       {['call','put'].map(t => (
                         <button key={t} onClick={() => setGrgOptionType(t)} style={{
@@ -1428,8 +1445,7 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
                         onChange={e => setGrgStrikeIdx(Number(e.target.value))}
                         style={{ marginLeft:'6px', background:'#1f2937', color:'#d1d5db', border:'1px solid #374151', borderRadius:4, padding:'2px 6px' }}
                       >
-                        <option value={atmIdx}>{atmStrike?.toLocaleString()} (ATM)</option>
-                        {grgStrikeOptions.filter(o => o.value !== atmIdx).map(o => (
+                        {grgStrikeOptions.map(o => (
                           <option key={o.value} value={o.value}>{o.label}</option>
                         ))}
                       </select>
@@ -1456,8 +1472,8 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
                         paper_bgcolor:'#0a0f19', plot_bgcolor:'#0a0f19',
                         font:{ color:'#d1d5db', size:11 },
                         title:{ text: `${isCall?'Call':'Put'} Greeks Rotation — K=${K?.toLocaleString()}`, font:{size:13,color:'#d1d5db'}, x:0.5 },
-                        xaxis:{ title:'RS-Ratio (Greek vs ATM, 100=parity)', gridcolor:'#1f2937', range:xR, zeroline:false },
-                        yaxis:{ title:'RS-Momentum (Rate of Change, 100=flat)', gridcolor:'#1f2937', range:yR, zeroline:false },
+                        xaxis:{ title: { text: 'RS-Ratio (Greek vs ATM, 100 = parity)', font: { color: '#fff', size: 14 } }, gridcolor:'#1f2937', range:xR, zeroline:false },
+                        yaxis:{ title: { text: 'RS-Momentum (Rate of Change, 100 = flat)', font: { color: '#fff', size: 14 } }, gridcolor:'#1f2937', range:yR, zeroline:false },
                         shapes:[
                           { type:'rect', x0:xR[0], x1:100,   y0:100,   y1:yR[1], fillcolor:'rgba(56,189,248,0.06)', line:{width:0} },  // Improving
                           { type:'rect', x0:100,   x1:xR[1], y0:100,   y1:yR[1], fillcolor:'rgba(34,197,94,0.06)',  line:{width:0} },  // Leading
@@ -1470,10 +1486,11 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
                           { xref:'paper', yref:'paper', x:0.98, y:0.03, text:'WEAKENING', showarrow:false, font:{color:'#f59e0b',size:11}, xanchor:'right' },
                           { xref:'paper', yref:'paper', x:0.02, y:0.03, text:'LAGGING',   showarrow:false, font:{color:'#ef4444',size:11}, xanchor:'left' },
                         ],
-                        legend:{ orientation:'h', y:1.08, font:{size:10} },
-                        showlegend: true,
+                        legend:{ orientation:'h', y:1.08, font:{size:10}, itemclick:'toggle', itemdoubleclick:'toggleothers' },
+                        showlegend: grgShowLegend,
+                        uirevision: 'grg-rotation',
                       }}
-                      config={{ displaylogo:false, responsive:true }}
+                      config={{ displaylogo:false, responsive:true, legend: { itemclick: 'toggle', itemdoubleclick: 'toggleothers' } }}
                       style={{ width:'100%' }}
                       useResizeHandler
                     />
@@ -1488,6 +1505,19 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
                       <div><span>Price</span><strong style={{color:'#d1d5db'}}>₹{Number(currentExpiry.gK.price).toFixed(2)}</strong></div>
                     </div>
                   )}
+
+                  {/* New GreekVsStrikesGRG chart below the existing GRG chart */}
+                  <GreekVsStrikesGRG
+                    sortedStrikes={sortedStrikes}
+                    atmIdx={atmIdx}
+                    atmStrike={atmStrike}
+                    maturityGrid={maturityGrid}
+                    expiryList={expiryList}
+                    marketMatrix={marketMatrix}
+                    sortedIndices={sortedIndices}
+                    spot={spot}
+                    bsmGreeks={bsmGreeks}
+                  />
                 </>
               );
             })()}

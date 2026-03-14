@@ -1,0 +1,90 @@
+Implement a new feature called Generate Report.
+
+This feature must use a separate report pipeline and must NOT be integrated into the core analytics or market data pipeline.
+
+Architecture requirements:
+
+- The report system must be an independent module.
+- It must run only when the user clicks Generate Report.
+- It must not execute during normal dashboard rendering.
+- It must not slow down or interfere with the main analytics pipeline.
+
+Trigger behavior:
+
+- Add a Generate Report button in the Settings page.
+- When clicked, call a dedicated report generation function.
+- This function will export charts and assemble a report layout.
+
+Important safety constraints:
+
+- Do not modify any existing analytics logic.
+- Do not modify pricing models (BSM, SABR, Heston, Monte Carlo).
+- Do not expose internal data sources.
+- Do not expose calibration parameters or infrastructure details.
+- Do not hallucinate analytics or generate new metrics.
+
+The report must only use charts that already exist in the dashboard.
+
+Report layout:
+
+Create a vertical research-style report optimized for LinkedIn sharing.
+
+Report width: about 1080px.
+
+Structure:
+
+Header  
+Title: Market Snapshot — NIFTY Options
+
+Top Metrics Section (from existing metric cards):
+- Spot Price
+- ATM IV
+- IV Rank
+- Volatility Risk Premium
+
+Section 1 — Market Context  
+Chart: Price & Vol History  
+Short explanation describing the relationship between price, realized volatility, and implied volatility.
+
+Section 2 — Volatility Term Structure  
+Chart: IV Term Structure  
+Short explanation describing volatility across maturities.
+
+Section 3 — Volatility Skew  
+Chart: Volatility Skew / Smile  
+Short explanation describing demand for downside protection.
+
+Section 4 — Market vs Model Pricing  
+Chart: Market − Model comparison chart  
+Short explanation describing how market prices deviate from pricing models.
+
+Section 5 — Dealer Positioning  
+Chart: Gamma Exposure by Strike  
+Short explanation describing dealer hedging pressure zones.
+
+Section 6 — Strategy Insight  
+Chart: PnL Sensitivity Heatmap  
+Short explanation describing how the strategy behaves across spot and volatility scenarios.
+
+Implementation rules:
+
+1. Export charts using Plotly’s built-in image export method.
+2. Do not attempt to screenshot the full DOM.
+3. Build the report layout on an offscreen canvas.
+4. Stack sections vertically with spacing between them.
+5. Each section must include:
+   - section title
+   - chart image
+   - short explanatory paragraph.
+6. Generate a single PNG file.
+7. Trigger download after report generation.
+
+Performance rules:
+
+- The report pipeline must run only on demand.
+- It must not execute during normal dashboard updates.
+- It must reuse existing chart data instead of recalculating analytics.
+
+Goal:
+
+Generate a clean vertical research-style PNG report that summarizes the market using selected charts, without affecting the performance of the main dashboard.

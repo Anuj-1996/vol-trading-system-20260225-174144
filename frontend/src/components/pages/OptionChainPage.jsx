@@ -45,8 +45,9 @@ function nearestIndex(values, target) {
     Math.abs(Number(value) - target) < Math.abs(Number(values[bestIndex]) - target) ? index : bestIndex
   ), 0);
 }
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import ThemedPlot from '../ThemedPlot';
+import html2canvas from 'html2canvas';
 import { Panel, SnapshotGuard, formatNumber } from './shared.jsx';
 import { fetchDealerPositioning, fetchMonteCarloVariant } from '../../api/client';
 import { bsmGreeks, erf } from '../../utils/bsmGreeks';
@@ -171,6 +172,49 @@ export default function OptionChainPage({
   const [positioning, setPositioning] = useState(null);
   const [monteCarloVariant, setMonteCarloVariant] = useState(null);
   const [plotModelView, setPlotModelView] = useState('hidden');
+  const pageRef = useRef(null);
+  const [copyPageState, setCopyPageState] = useState('idle');
+
+  // Copy the entire page snapshot to clipboard, including all model plots if selected
+  const copyPageSnapshotToClipboard = async () => {
+    try {
+      setCopyPageState('working');
+      const node = pageRef.current;
+      if (!node) throw new Error('Page not found.');
+      const canvas = await html2canvas(node, { backgroundColor: '#181c23', useCORS: true, scale: 2 });
+      if (navigator.clipboard && typeof window.ClipboardItem !== 'undefined') {
+        canvas.toBlob(async (blob) => {
+          try {
+            await navigator.clipboard.write([
+              new window.ClipboardItem({ [blob.type]: blob })
+            ]);
+            setCopyPageState('copied');
+          } catch (err) {
+            console.error('Clipboard write failed:', err);
+            setCopyPageState('failed');
+            alert('Copy to clipboard failed. Your browser may not support this feature. Try right-clicking the image to save, or use Chrome/Edge on HTTPS.');
+          }
+        }, 'image/png');
+      } else {
+        // Clipboard not supported, offer download fallback
+        const imageUrl = canvas.toDataURL('image/png');
+        const link = document.createElement('a');
+        link.href = imageUrl;
+        link.download = 'page-snapshot.png';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setCopyPageState('copied');
+        alert('Clipboard not supported. Image downloaded instead.');
+      }
+    } catch (err) {
+      console.error('Snapshot error:', err);
+      setCopyPageState('failed');
+      alert('Snapshot failed: ' + (err?.message || err));
+    } finally {
+      setTimeout(() => setCopyPageState('idle'), 1400);
+    }
+  };
 
   useEffect(() => {
     setLocalExpiryIndex(selectedExpiryIndex);
@@ -583,7 +627,34 @@ export default function OptionChainPage({
 
   return (
     <SnapshotGuard loading={loading} activeSnapshotId={activeSnapshotId}>
-      <div className="page-option-chain-grid">
+      <div className="page-option-chain-grid" ref={pageRef}>
+        {/* Copy Page button above the panel, styled as requested */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <button
+            className={`toolbar-btn copy-page-btn${copyPageState === 'failed' ? ' error' : ''}`}
+            onClick={copyPageSnapshotToClipboard}
+            title="Copy entire page snapshot to clipboard"
+            type="button"
+            style={{
+              fontWeight: 500,
+              fontSize: '11.5px', // match nav button font size (likely 13-14px)
+              padding: '2.5px 13px', // visually align with nav button height
+              borderRadius: 5,
+              background: '#0c0c0c',
+              color: '#fff',
+              border: '1px solid #444',
+              boxShadow: 'none',
+              outline: 'none',
+              cursor: 'pointer',
+              transition: 'background 0.2s',
+              opacity: copyPageState === 'working' ? 0.7 : 1,
+              letterSpacing: 0.2,
+            }}
+            disabled={copyPageState === 'working'}
+          >
+            {copyPageState === 'copied' ? 'Copied!' : copyPageState === 'failed' ? 'Failed' : copyPageState === 'working' ? 'Copying…' : 'Copy Page'}
+          </button>
+        </div>
         <Panel title="Dynamic Option Chain">
           <div className="option-chain-toolbar">
             <label>
@@ -973,6 +1044,7 @@ export default function OptionChainPage({
                 <option value="BSM">BSM</option>
                 <option value="MonteCarlo">Monte Carlo</option>
                 <option value="Avg3">Avg 3</option>
+                <option value="AllModels">All Models</option>
                 <option value="ParityDiff">Put-Call Parity Diff</option>
               </select>
             </label>
@@ -1011,6 +1083,44 @@ export default function OptionChainPage({
                       line: { dash: 'dot', color: '#c62828' },
                     },
                   ];
+                } else if (plotModelView === 'AllModels') {
+                  // Show all model diff traces for both call and put
+                  const modelKeys = ['Heston', 'SABR', 'BSM', 'MonteCarlo', 'Avg3'];
+                  const modelColors = {
+                    Heston: '#1976d2',
+                    SABR: '#43a047',
+                    BSM: '#fbc02d',
+                    MonteCarlo: '#8e24aa',
+                    Avg3: '#e64a19',
+                  };
+                  traces = [];
+                  modelKeys.forEach(model => {
+                    const callDiff = visibleRows.map(row => {
+                      const modelSlice = row.modelSlices?.[model];
+                      return modelSlice?.callPrice != null ? (row.callDisplayPrice - modelSlice.callPrice) * lotSize : null;
+                    });
+                    const putDiff = visibleRows.map(row => {
+                      const modelSlice = row.modelSlices?.[model];
+                      return modelSlice?.putPrice != null ? (row.putDisplayPrice - modelSlice.putPrice) * lotSize : null;
+                    });
+                    traces.push({
+                      x: strikes,
+                      y: callDiff,
+                      name: `${MODEL_LABELS[model]} Call`,
+                      mode: 'lines+markers',
+                      marker: { color: modelColors[model] },
+                      line: { color: modelColors[model], dash: 'solid' },
+                    });
+                    traces.push({
+                      x: strikes,
+                      y: putDiff,
+                      name: `${MODEL_LABELS[model]} Put`,
+                      mode: 'lines+markers',
+                      marker: { color: modelColors[model], symbol: 'circle-open' },
+                      line: { color: modelColors[model], dash: 'dot' },
+                    });
+                  });
+                  hasData = traces.some(trace => trace.y.some(v => v !== null));
                 } else {
                   // Show only model diff traces
                   const callDiff = visibleRows.map(row => {

@@ -128,63 +128,53 @@ class StrategyEngineService:
         max_expiries: int = 5,
         source: Optional[str] = None,
     ) -> Dict[str, Any]:
-        resolved_source = str(source or CONFIG.data.source or "NSE").upper()
-        if resolved_source == "ZERODHA":
-            return self.fetch_zerodha_live_data(symbol=symbol, max_expiries=max_expiries)
-        return self.fetch_nse_live_data(symbol=symbol, expiries=expiries, max_expiries=max_expiries)
+        from datetime import datetime
+        today = datetime.now().weekday()  # 0=Monday, 6=Sunday
+        resolved_source = str(source or CONFIG.data.source or "src2").lower()
+        # Always use src2 (NSE) on weekends
+        if today in (5, 6):  # Saturday or Sunday
+            resolved_source = "src2"
+        if resolved_source == "src1":
+            return self.fetch_src1_live_data(symbol=symbol, max_expiries=max_expiries)
+        return self.fetch_src2_live_data(symbol=symbol, expiries=expiries, max_expiries=max_expiries)
 
-    def fetch_nse_live_data(
+    def fetch_src2_live_data(
         self,
         symbol: str = "NIFTY",
         expiries: Optional[List[str]] = None,
         max_expiries: int = 5,
     ) -> Dict[str, Any]:
         """
-        Fetch live data from NSE, clean it, cache it, and return summary.
-
-        Parameters
-        ----------
-        symbol : str
-            Index symbol ("NIFTY" or "BANKNIFTY")
-        expiries : list[str] or None
-            If None or ["all"], fetches all future expiries.
-            Otherwise fetches only the specified expiry strings.
-
-        Returns
-        -------
-        dict with: data_id, spot, timestamp, expiry_dates, record_count,
-                   quality_report, symbol
+        Fetch live data from src2, clean it, cache it, and return summary.
         """
-        self._logger.info("FETCH_NSE_LIVE | symbol=%s | expiries=%s", symbol, expiries)
+        self._logger.info("FETCH_SRC2_LIVE | symbol=%s | expiries=%s", symbol, expiries)
 
         if expiries is None or expiries == ["all"] or not expiries:
             fetch_result = self._nse_fetcher.fetch_all_expiries(
                 symbol=symbol, max_expiries=max_expiries,
             )
         else:
-            # Fetch single expiry
             fetch_result = self._nse_fetcher.fetch_single_expiry(
                 symbol=symbol,
                 expiry_date=expiries[0],
             )
 
-        # Clean the data
         clean_result = self._nse_cleaner.clean(
             records=fetch_result.records,
             spot=fetch_result.spot,
         )
 
         data_id = self._cache_live_data(
-            prefix="nse",
+            prefix="src2",
             symbol=symbol,
             fetch_result=fetch_result,
             cleaned_records=clean_result.cleaned_records,
             quality_report=clean_result.quality_report,
-            source="NSE",
+            source="src2",
         )
 
         self._logger.info(
-            "FETCH_NSE_LIVE | CACHED | data_id=%s | records=%d | spot=%.2f",
+            "FETCH_SRC2_LIVE | CACHED | data_id=%s | records=%d | spot=%.2f",
             data_id,
             len(clean_result.cleaned_records),
             fetch_result.spot,
@@ -199,7 +189,7 @@ class StrategyEngineService:
             "raw_entry_count": fetch_result.raw_entry_count,
             "quality_report": clean_result.quality_report,
             "symbol": symbol,
-            "source": "NSE",
+            "source": "src2",
         }
 
     def get_cached_nse_data(self, data_id: str) -> Optional[Dict[str, Any]]:
@@ -225,118 +215,118 @@ class StrategyEngineService:
         kite_universe_builder = KiteOptionUniverseBuilder(underlying_symbol=CONFIG.zerodha.underlying_symbol)
         universe = kite_universe_builder.build(
             nfo_instruments=nfo_instruments,
-            underlying_instruments=underlying_instruments,
-            symbol=symbol,
-            max_expiries=max_expiries,
-        )
-        builder = KiteOptionChainBuilder(
-            universe=universe,
-            risk_free_rate=CONFIG.zerodha.risk_free_rate,
-        )
+            def fetch_src1_live_data(
+                self,
+                symbol: str = "NIFTY",
+                max_expiries: int = 5,
+            ) -> Dict[str, Any]:
+                self._logger.info("FETCH_SRC1_LIVE | symbol=%s | max_expiries=%d", symbol, max_expiries)
 
-        initial_spot = self._kite_client.get_ltp(universe.underlying_symbol)
-        if initial_spot > 0:
-            builder.update_underlying_price(initial_spot)
+                self._kite_client.authenticate()
+                nfo_instruments = self._kite_client.get_instruments("NFO")
+                underlying_instruments = self._kite_client.get_instruments("NSE")
+                kite_universe_builder = KiteOptionUniverseBuilder(underlying_symbol=CONFIG.zerodha.underlying_symbol)
+                universe = kite_universe_builder.build(
+                    nfo_instruments=nfo_instruments,
+                    underlying_instruments=underlying_instruments,
+                    symbol=symbol,
+                    max_expiries=max_expiries,
+                )
+                builder = KiteOptionChainBuilder(
+                    universe=universe,
+                    risk_free_rate=CONFIG.zerodha.risk_free_rate,
+                )
 
-        tokens = universe.tokens_for_expiries(sorted(universe.expiry_map))
-        if len(tokens) > CONFIG.zerodha.max_instruments_per_subscription:
-            raise DataIngestionError(
-                message="Configured Zerodha subscription limit is too low for the selected option universe",
-                context={
-                    "required_tokens": len(tokens),
-                    "configured_limit": CONFIG.zerodha.max_instruments_per_subscription,
-                },
-            )
-        snapshot_ready = threading.Event()
-        stream_error: Dict[str, Exception] = {}
-        latest_records: List[OptionChainRawRecord] = []
+                initial_spot = self._kite_client.get_ltp(universe.underlying_symbol)
+                if initial_spot > 0:
+                    builder.update_underlying_price(initial_spot)
+                tokens = universe.tokens_for_expiries(sorted(universe.expiry_map))
+                if len(tokens) > CONFIG.zerodha.max_instruments_per_subscription:
+                    raise DataIngestionError(
+                        message="Configured src1 subscription limit is too low for the selected option universe",
+                        context={
+                            "required_tokens": len(tokens),
+                            "configured_limit": CONFIG.zerodha.max_instruments_per_subscription,
+                        },
+                    )
+                snapshot_ready = threading.Event()
+                stream_error: Dict[str, Exception] = {}
+                latest_records: List[OptionChainRawRecord] = []
 
-        def _on_ticks(ticks: List[Dict[str, Any]]) -> None:
-            nonlocal latest_records
-            records = builder.apply_ticks(ticks=ticks)
-            if records:
-                latest_records = records
-                snapshot_ready.set()
+                def _on_ticks(ticks: List[Dict[str, Any]]) -> None:
+                    nonlocal latest_records
+                    records = builder.apply_ticks(ticks=ticks)
+                    if records:
+                        latest_records = records
+                        snapshot_ready.set()
 
-        def _on_error(exc: Exception) -> None:
-            stream_error["error"] = exc
-            snapshot_ready.set()
+                def _on_error(exc: Exception) -> None:
+                    stream_error["error"] = exc
+                    snapshot_ready.set()
 
-        try:
-            self._kite_client.connect(
-                tokens=tokens,
-                on_ticks=_on_ticks,
-                on_error=_on_error,
-            )
-            snapshot_ready.wait(timeout=CONFIG.zerodha.snapshot_timeout_seconds)
-        finally:
-            self._kite_client.close()
+                try:
+                    self._kite_client.connect(
+                        tokens=tokens,
+                        on_ticks=_on_ticks,
+                        on_error=_on_error,
+                    )
+                    snapshot_ready.wait(timeout=CONFIG.zerodha.snapshot_timeout_seconds)
+                finally:
+                    self._kite_client.close()
 
-        if "error" in stream_error:
-            raise DataIngestionError(
-                message="Zerodha streaming snapshot failed",
-                context={"symbol": symbol, "error": str(stream_error["error"])},
-            )
-        if not latest_records:
-            raise DataIngestionError(
-                message="Timed out waiting for Zerodha snapshot",
-                context={
+                if "error" in stream_error:
+                    raise DataIngestionError(
+                        message="src1 streaming snapshot failed",
+                        context={"symbol": symbol, "error": str(stream_error["error"])}
+                    )
+                if not latest_records:
+                    raise DataIngestionError(
+                        message="Timed out waiting for src1 snapshot",
+                        context={
+                            "symbol": symbol,
+                            "timeout_seconds": CONFIG.zerodha.snapshot_timeout_seconds,
+                            "subscribed_tokens": len(tokens),
+                        },
+                    )
+
+                from datetime import datetime
+                timestamp = datetime.now().isoformat()
+                fetch_result = FetchResult(
+                    records=latest_records,
+                    spot=builder.underlying_price or initial_spot,
+                    timestamp=timestamp,
+                    expiry_dates=[expiry.isoformat() for expiry in sorted(universe.expiry_map)],
+                    symbol=symbol,
+                    raw_entry_count=len(latest_records),
+                )
+                clean_result = self._nse_cleaner.clean(
+                    records=latest_records,
+                    spot=fetch_result.spot,
+                )
+                data_id = self._cache_live_data(
+                    prefix="src1",
+                    symbol=symbol,
+                    fetch_result=fetch_result,
+                    cleaned_records=clean_result.cleaned_records,
+                    quality_report={
+                        **clean_result.quality_report,
+                        "source": "src1",
+                        "strike_count": float(len({record.strike for record in clean_result.cleaned_records})),
+                        "expiry_count": float(len({record.expiry for record in clean_result.cleaned_records})),
+                    },
+                    source="src1",
+                )
+                return {
+                    "data_id": data_id,
+                    "spot": fetch_result.spot,
+                    "timestamp": fetch_result.timestamp,
+                    "expiry_dates": fetch_result.expiry_dates,
+                    "record_count": len(clean_result.cleaned_records),
+                    "raw_entry_count": fetch_result.raw_entry_count,
+                    "quality_report": _live_data_cache[data_id]["quality_report"],
                     "symbol": symbol,
-                    "timeout_seconds": CONFIG.zerodha.snapshot_timeout_seconds,
-                    "subscribed_tokens": len(tokens),
-                },
-            )
-
-        timestamp = datetime.now().isoformat()
-        fetch_result = FetchResult(
-            records=latest_records,
-            spot=builder.underlying_price or initial_spot,
-            timestamp=timestamp,
-            expiry_dates=[expiry.isoformat() for expiry in sorted(universe.expiry_map)],
-            symbol=symbol,
-            raw_entry_count=len(latest_records),
-        )
-        clean_result = self._nse_cleaner.clean(
-            records=latest_records,
-            spot=fetch_result.spot,
-        )
-        data_id = self._cache_live_data(
-            prefix="zerodha",
-            symbol=symbol,
-            fetch_result=fetch_result,
-            cleaned_records=clean_result.cleaned_records,
-            quality_report={
-                **clean_result.quality_report,
-                "source": "ZERODHA",
-                "strike_count": float(len({record.strike for record in clean_result.cleaned_records})),
-                "expiry_count": float(len({record.expiry for record in clean_result.cleaned_records})),
-            },
-            source="ZERODHA",
-        )
-        return {
-            "data_id": data_id,
-            "spot": fetch_result.spot,
-            "timestamp": fetch_result.timestamp,
-            "expiry_dates": fetch_result.expiry_dates,
-            "record_count": len(clean_result.cleaned_records),
-            "raw_entry_count": fetch_result.raw_entry_count,
-            "quality_report": _live_data_cache[data_id]["quality_report"],
-            "symbol": symbol,
-            "source": "ZERODHA",
-        }
-
-    def compare_live_sources(
-        self,
-        *,
-        symbol: str = "NIFTY",
-        max_expiries: int = 5,
-    ) -> Dict[str, Any]:
-        nse_result = self.fetch_nse_live_data(symbol=symbol, expiries=None, max_expiries=max_expiries)
-        zerodha_result = self.fetch_zerodha_live_data(symbol=symbol, max_expiries=max_expiries)
-
-        nse_records = self.get_cached_live_data(nse_result["data_id"]) or {}
-        zerodha_records = self.get_cached_live_data(zerodha_result["data_id"]) or {}
-
+                    "source": "src1",
+                }
         nse_by_key = {
             (record.expiry.isoformat(), record.strike): record
             for record in nse_records.get("cleaned_records", [])

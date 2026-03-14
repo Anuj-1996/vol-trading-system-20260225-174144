@@ -48,7 +48,8 @@ const INITIAL_FORM = {
 };
 
 const LIVE_SOURCE_OPTIONS = [
-  { value: 'ZERODHA', label: 'Live Feed' },
+  { value: 'src1', label: 'src1' },
+  { value: 'src2', label: 'src2' },
 ];
 
 const NAV_ITEMS = [
@@ -88,7 +89,7 @@ export default function App() {
   const [clockValue, setClockValue] = useState(new Date());
   const [backendStatus, setBackendStatus] = useState('unknown');
   const [underlying, setUnderlying] = useState('NIFTY');
-  const [liveSource, setLiveSource] = useState('ZERODHA');
+  const [liveSource, setLiveSource] = useState('src1');
   const [selectedExpiry, setSelectedExpiry] = useState('auto');
   const [recentLogs, setRecentLogs] = useState([]);
   const [modelSelection, setModelSelection] = useState('SABR');
@@ -326,10 +327,10 @@ export default function App() {
     || market?.data_source
     || liveRefreshStatus?.source
     || liveSource
-    || 'NSE'
+    || 'src2'
   )
     .replace(/_live$/i, '')
-    .toUpperCase();
+    .toLowerCase();
 
   useEffect(() => {
     const symbol = String(liveMetadata?.symbol || underlying || 'NIFTY').toUpperCase();
@@ -784,7 +785,7 @@ export default function App() {
                 <select
                   value={liveSource}
                   onChange={(event) => setLiveSource(event.target.value)}
-                  title="Choose whether to fetch delayed NSE data or Zerodha live feed."
+                  title="Choose between src1 and src2. src1 is the primary source, src2 is the secondary source."
                 >
                   {LIVE_SOURCE_OPTIONS.map((item) => (
                     <option key={item.value} value={item.value}>
@@ -828,13 +829,13 @@ export default function App() {
                 <span>Regime</span>
                 <strong style={{ color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e' }}>{regimeLabel}</strong>
               </div>
-              {liveSource === 'ZERODHA' && kiteTokenExpired ? (
+              {liveSource === 'src1' && kiteTokenExpired ? (
                 <button
                   type="button"
                   className="action-btn top-connect-btn"
                   onClick={connectZerodha}
                   disabled={loading}
-                  title="Open login to refresh the Kite access token."
+                  title="Open login to refresh the src1 access token."
                 >
                   Connect
                 </button>
@@ -845,7 +846,7 @@ export default function App() {
             </div>
 
             <div className="top-status-meta">
-              <div className="top-mini-metric"><span>Source</span><strong className="status-text-ok">{liveSourceLabel} Live</strong></div>
+              <div className="top-mini-metric"><span>Source</span><strong className="status-text-ok">{liveSourceLabel}</strong></div>
               <div className="top-mini-metric" title="Background refresh status from the backend live snapshot manager.">
                 <span>Live</span>
                 <strong className={liveStatusClass}>{liveStatusLabel}</strong>

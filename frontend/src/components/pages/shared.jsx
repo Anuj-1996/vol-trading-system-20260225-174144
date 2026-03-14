@@ -136,14 +136,38 @@ export function Panel({ title, children, className = '', onMaximize, enableCopyP
         scale: 2,
       });
 
-      const response = await fetch(imageDataUrl);
-      const blob = await response.blob();
-      await navigator.clipboard.write([
-        new window.ClipboardItem({
-          [blob.type]: blob,
-        }),
-      ]);
-      setCopyState('copied');
+      // Create a new canvas to combine title and plot image
+      const titleText = (typeof title === 'string') ? title : (title?.props?.children || '');
+      const titleFont = 'bold 22px Arial, sans-serif';
+      const titleHeight = 38; // px
+      const padding = 12; // px
+      const totalHeight = height + titleHeight + padding;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = totalHeight;
+      const ctx = canvas.getContext('2d');
+      // Fill background (match panel)
+      ctx.fillStyle = '#181c23';
+      ctx.fillRect(0, 0, width, totalHeight);
+      // Draw title
+      ctx.font = titleFont;
+      ctx.fillStyle = '#ffb300';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(titleText, width / 2, padding);
+      // Draw plot image
+      const img = new window.Image();
+      img.src = imageDataUrl;
+      await new Promise((resolve) => { img.onload = resolve; });
+      ctx.drawImage(img, 0, titleHeight, width, height);
+
+      // Copy combined image to clipboard
+      canvas.toBlob(async (blob) => {
+        await navigator.clipboard.write([
+          new window.ClipboardItem({ [blob.type]: blob })
+        ]);
+        setCopyState('copied');
+      }, 'image/png');
     } catch (error) {
       console.error(error);
       setCopyState('failed');

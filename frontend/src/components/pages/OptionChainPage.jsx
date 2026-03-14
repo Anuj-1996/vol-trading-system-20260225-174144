@@ -1077,7 +1077,7 @@ export default function OptionChainPage({
                           yref: 'paper',
                           text: `ATM ${atmStrike}`,
                           showarrow: false,
-                          font: { color: '#ffb300', size: 15, family: 'inherit', weight: 'bold' },
+                          font: { color: '#ffb300', size: 11, family: 'inherit', weight: 'bold' },
                           align: 'center',
                         },
                       ] : [],

@@ -798,6 +798,7 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
         <div className="market-plots-stack">
           <Panel title="Price Chart">
             <Plot
+              id="price-chart"
               data={priceChartData}
               layout={{
                 height: 360,
@@ -835,10 +836,10 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
               useResizeHandler
             />
             <div className="kv-grid two-col compact">
-              <div><span>20D RV</span><strong>{formatPct(market?.rv_20d, 2)}</strong></div>
-              <div><span>60D RV</span><strong>{formatPct(market?.rv_60d, 2)}</strong></div>
-              <div><span>Volume (last)</span><strong>{formatNumber(volumeSeries[volumeSeries.length - 1], 0)}</strong></div>
-              <div><span>ATM IV - 20D RV (pts)</span><strong>{spotSpreadPct !== null ? formatNumber(spotSpreadPct, 2) : '-'}</strong></div>
+              <div data-report-metric="rv20"><span>20D RV</span><strong>{formatPct(market?.rv_20d, 2)}</strong></div>
+              <div data-report-metric="rv60"><span>60D RV</span><strong>{formatPct(market?.rv_60d, 2)}</strong></div>
+              <div data-report-metric="volume-last"><span>Volume (last)</span><strong>{formatNumber(volumeSeries[volumeSeries.length - 1], 0)}</strong></div>
+              <div data-report-metric="atm-iv-rv20"><span>ATM IV - 20D RV (pts)</span><strong>{spotSpreadPct !== null ? formatNumber(spotSpreadPct, 2) : '-'}</strong></div>
             </div>
           </Panel>
           <Panel title="Volatility Summary">
@@ -846,49 +847,50 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
               <section className="market-summary-section">
                 <h4>Realized Vol</h4>
                 <div className="kv-grid two-col market-metrics-grid">
-                  <div><span>10D RV</span><strong>{formatPct(market?.rv_10d, 2)}</strong></div>
-                  <div><span>20D RV</span><strong>{formatPct(market?.rv_20d, 2)}</strong></div>
-                  <div><span>60D RV</span><strong>{formatPct(market?.rv_60d, 2)}</strong></div>
-                  <div><span>RV Percentile</span><strong>{formatNumber(market?.rv_percentile, 2)}%</strong></div>
+                  <div data-report-metric="rv10"><span>10D RV</span><strong>{formatPct(market?.rv_10d, 2)}</strong></div>
+                  <div data-report-metric="rv20"><span>20D RV</span><strong>{formatPct(market?.rv_20d, 2)}</strong></div>
+                  <div data-report-metric="rv60"><span>60D RV</span><strong>{formatPct(market?.rv_60d, 2)}</strong></div>
+                  <div data-report-metric="rv-percentile"><span>RV Percentile</span><strong>{formatNumber(market?.rv_percentile, 2)}%</strong></div>
                 </div>
               </section>
               <section className="market-summary-section">
                 <h4>Regime</h4>
                 <div className="kv-grid two-col market-metrics-grid">
-                  <div><span>Trend Regime</span><strong style={{color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e'}}>{market?.regime?.label || '-'}</strong></div>
-                  <div><span>Vol Regime (IV/RV)</span><strong>{market?.regime?.volatility_regime_score != null ? Number(market.regime.volatility_regime_score).toFixed(2) + 'x' : '-'}</strong></div>
-                  <div><span>Skew (Put-Call)</span><strong>{market?.regime?.skew_regime_score != null ? (Number(market.regime.skew_regime_score) * 100).toFixed(2) + ' pts' : '-'}</strong></div>
-                  <div><span>Confidence</span><strong>{market?.regime?.confidence != null ? (Number(market.regime.confidence) * 100).toFixed(1) + '%' : '-'}</strong></div>
+                  <div data-report-metric="trend-regime"><span>Trend Regime</span><strong style={{color: market?.regime?.label === 'high_vol' ? '#ef4444' : '#22c55e'}}>{market?.regime?.label || '-'}</strong></div>
+                  <div data-report-metric="vol-regime-score"><span>Vol Regime (IV/RV)</span><strong>{market?.regime?.volatility_regime_score != null ? Number(market.regime.volatility_regime_score).toFixed(2) + 'x' : '-'}</strong></div>
+                  <div data-report-metric="skew-regime-score"><span>Skew (Put-Call)</span><strong>{market?.regime?.skew_regime_score != null ? (Number(market.regime.skew_regime_score) * 100).toFixed(2) + ' pts' : '-'}</strong></div>
+                  <div data-report-metric="regime-confidence"><span>Confidence</span><strong>{market?.regime?.confidence != null ? (Number(market.regime.confidence) * 100).toFixed(1) + '%' : '-'}</strong></div>
                 </div>
               </section>
               <section className="market-summary-section">
                 <h4>Vol Stats</h4>
                 <div className="kv-grid two-col market-metrics-grid">
-                  <div><span>ATM Market IV</span><strong style={{color:'#f59e0b'}}>{market?.atm_iv != null ? (Number(market.atm_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
-                  <div><span>ATM Model IV</span><strong>{market?.atm_model_iv != null ? (Number(market.atm_model_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
-                  <div><span>IV Rank</span><strong>{market?.iv_rank != null ? Number(market.iv_rank).toFixed(1) + '%' : '-'}</strong></div>
-                  <div><span>IV Percentile</span><strong>{market?.iv_percentile != null ? Number(market.iv_percentile).toFixed(1) + '%' : '-'}</strong></div>
-                  <div><span>IV-RV Spread</span><strong style={{color: Number(market?.realized_implied_spread ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{market?.realized_implied_spread != null ? (Number(market.realized_implied_spread) * 100).toFixed(2) + ' pts' : '-'}</strong></div>
-                  <div><span>VVIX Equivalent</span><strong>{market?.vvix_equivalent != null ? (Number(market.vvix_equivalent) * 100).toFixed(2) + '%' : '-'}</strong></div>
+                  <div data-report-metric="atm-market-iv"><span>ATM Market IV</span><strong style={{color:'#f59e0b'}}>{market?.atm_iv != null ? (Number(market.atm_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
+                  <div data-report-metric="atm-model-iv"><span>ATM Model IV</span><strong>{market?.atm_model_iv != null ? (Number(market.atm_model_iv) * 100).toFixed(2) + '%' : '-'}</strong></div>
+                  <div data-report-metric="iv-rank"><span>IV Rank</span><strong>{market?.iv_rank != null ? Number(market.iv_rank).toFixed(1) + '%' : '-'}</strong></div>
+                  <div data-report-metric="iv-percentile"><span>IV Percentile</span><strong>{market?.iv_percentile != null ? Number(market.iv_percentile).toFixed(1) + '%' : '-'}</strong></div>
+                  <div data-report-metric="iv-rv-spread"><span>IV-RV Spread</span><strong style={{color: Number(market?.realized_implied_spread ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{market?.realized_implied_spread != null ? (Number(market.realized_implied_spread) * 100).toFixed(2) + ' pts' : '-'}</strong></div>
+                  <div data-report-metric="vvix-equivalent"><span>VVIX Equivalent</span><strong>{market?.vvix_equivalent != null ? (Number(market.vvix_equivalent) * 100).toFixed(2) + '%' : '-'}</strong></div>
                 </div>
               </section>
               <section className="market-summary-section">
                 <h4>Diagnostics</h4>
                 <div className="kv-grid two-col market-metrics-grid">
-                  <div><span>Forward VRP 20D ({selectedModel})</span><strong style={{color: Number(diagnostics.forwardVrp20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.forwardVrp20 != null ? `${formatNumber(diagnostics.forwardVrp20, 2)} pts` : '-'}</strong></div>
-                  <div><span>Spot VRP (ATM IV - RV20)</span><strong style={{color: Number(diagnostics.atmRv20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.atmRv20 != null ? `${formatNumber(diagnostics.atmRv20, 2)} pts` : '-'}</strong></div>
-                  <div><span>Spot VRP (ATM IV - RV60)</span><strong style={{color: Number(diagnostics.atmRv60 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.atmRv60 != null ? `${formatNumber(diagnostics.atmRv60, 2)} pts` : '-'}</strong></div>
-                  <div><span>Spot VRP (IV Proxy - HV20)</span><strong style={{color: Number(diagnostics.ivProxyHv20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.ivProxyHv20 != null ? `${formatNumber(diagnostics.ivProxyHv20, 2)} pts` : '-'}</strong></div>
-                  <div><span>Term Slope (IV30 - IV7)</span><strong>{diagnostics.slope30_7 != null ? `${formatNumber(diagnostics.slope30_7, 2)} pts` : '-'}</strong></div>
-                  <div><span>Term Slope (IV60 - IV30)</span><strong>{diagnostics.slope60_30 != null ? `${formatNumber(diagnostics.slope60_30, 2)} pts` : '-'}</strong></div>
-                  <div><span>Spot IV/RV20 Ratio</span><strong>{diagnostics.ivRvRatioSpot != null ? `${formatNumber(diagnostics.ivRvRatioSpot, 2)}x` : '-'}</strong></div>
-                  <div><span>Percentile Gap (IV-RV)</span><strong>{diagnostics.percentileGap != null ? `${formatNumber(diagnostics.percentileGap, 1)} pts` : '-'}</strong></div>
+                  <div data-report-metric="forward-vrp-20d"><span>Forward VRP 20D ({selectedModel})</span><strong style={{color: Number(diagnostics.forwardVrp20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.forwardVrp20 != null ? `${formatNumber(diagnostics.forwardVrp20, 2)} pts` : '-'}</strong></div>
+                  <div data-report-metric="spot-vrp-atm-iv-rv20"><span>Spot VRP (ATM IV - RV20)</span><strong style={{color: Number(diagnostics.atmRv20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.atmRv20 != null ? `${formatNumber(diagnostics.atmRv20, 2)} pts` : '-'}</strong></div>
+                  <div data-report-metric="spot-vrp-atm-iv-rv60"><span>Spot VRP (ATM IV - RV60)</span><strong style={{color: Number(diagnostics.atmRv60 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.atmRv60 != null ? `${formatNumber(diagnostics.atmRv60, 2)} pts` : '-'}</strong></div>
+                  <div data-report-metric="spot-vrp-ivproxy-hv20"><span>Spot VRP (IV Proxy - HV20)</span><strong style={{color: Number(diagnostics.ivProxyHv20 ?? 0) >= 0 ? '#22c55e' : '#ef4444'}}>{diagnostics.ivProxyHv20 != null ? `${formatNumber(diagnostics.ivProxyHv20, 2)} pts` : '-'}</strong></div>
+                  <div data-report-metric="term-slope-iv30-iv7"><span>Term Slope (IV30 - IV7)</span><strong>{diagnostics.slope30_7 != null ? `${formatNumber(diagnostics.slope30_7, 2)} pts` : '-'}</strong></div>
+                  <div data-report-metric="term-slope-iv60-iv30"><span>Term Slope (IV60 - IV30)</span><strong>{diagnostics.slope60_30 != null ? `${formatNumber(diagnostics.slope60_30, 2)} pts` : '-'}</strong></div>
+                  <div data-report-metric="spot-iv-rv20-ratio"><span>Spot IV/RV20 Ratio</span><strong>{diagnostics.ivRvRatioSpot != null ? `${formatNumber(diagnostics.ivRvRatioSpot, 2)}x` : '-'}</strong></div>
+                  <div data-report-metric="percentile-gap-iv-rv"><span>Percentile Gap (IV-RV)</span><strong>{diagnostics.percentileGap != null ? `${formatNumber(diagnostics.percentileGap, 1)} pts` : '-'}</strong></div>
                 </div>
               </section>
             </div>
           </Panel>
           <Panel title="IV Term Structure">
             <Plot
+              id="iv-term-structure-chart"
               data={[
                 {
                   type: 'scatter',
@@ -1079,6 +1081,7 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
                     <div style={{ color: '#ef4444', textAlign: 'center' }}>No data available for Skew Curve</div>
                   ) : (
                     <Plot
+                      id="skew-curve-chart"
                       data={plotData}
                       layout={{
                         height: 260,
@@ -1260,6 +1263,7 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
                     <div className="snapshot-placeholder">No data available for selected expiry/range.</div>
                   ) : (
                     <Plot
+                      id="price-comp-stacked-chart"
                       data={traces}
                       layout={{
                         height: 360,
@@ -1460,6 +1464,7 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
                     <div className="snapshot-placeholder">Need ≥2 expiries to compute rotation. Load a multi-expiry snapshot.</div>
                   ) : (
                     <Plot
+                      id="grg-rotation-chart"
                       data={[
                         // Quadrant background shapes are in layout.shapes; add centre lines as traces
                         { type:'scatter', mode:'lines', x:[xR[0],xR[1]], y:[100,100], line:{color:'#374151',width:1,dash:'dash'}, showlegend:false, hoverinfo:'skip' },
@@ -1544,6 +1549,7 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
             </div>
             {vrpChartSeries.dates.length ? (
               <Plot
+                id="vrp-area-chart"
                 data={[
                   {
                     type: 'scatter',
@@ -1624,6 +1630,7 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
             </div>
             {hasForecastData ? (
               <Plot
+                id="vol-forecast-chart"
                 data={[
                   {
                     type: 'scatter',
@@ -1710,6 +1717,7 @@ export default function MarketPage({ loading = false, activeSnapshotId = null, m
             </div>
             {regression.points.length ? (
               <Plot
+                id="model-scatter-chart"
                 data={[
                   {
                     type: 'scatter',

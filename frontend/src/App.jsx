@@ -28,6 +28,7 @@ import SurfacePage from './components/pages/SurfacePage';
 import { Panel, formatNumber } from './components/pages/shared.jsx';
 import { useSnapshotStore } from './store/useSnapshotStore';
 import { ThemeContext, THEME_OPTIONS, THEME_STORAGE_KEY } from './theme';
+import SettingsPage from './components/pages/SettingsPage';
 
 const PANEL_TITLE_COLOR_STORAGE_KEY = 'vol-trading-panel-title-color';
 const DEFAULT_PANEL_TITLE_COLOR = '#f59e0b';
@@ -766,6 +767,9 @@ export default function App() {
     }
     if (activePage === 'portfolio') {
       return <PortfolioPage loading={loading} activeSnapshotId={activeSnapshotId} market={market} />;
+    }
+    if (activePage === 'settings') {
+      return <SettingsPage />;
     }
     return renderSettingsPage();
   };
